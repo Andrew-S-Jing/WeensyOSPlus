@@ -50,7 +50,11 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
 
     // Your code here.
-
+    // m61_malloc(0) returns the nullptr. Counts as a successful, inactive allocation.
+    if (sz == 0) {
+        default_buffer.stats.ntotal++;
+        return nullptr;
+    }
 
     if (default_buffer.pos + sz > default_buffer.size) {
         // Not enough space left in default buffer for allocation
@@ -83,9 +87,15 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
 void m61_free(void* ptr, const char* file, int line) {
     // avoid uninitialized variable warnings
-    (void) ptr, (void) file, (void) line;
+    (void) file, (void) line;
 
     // Your code here.
+    // Do nothing upon m61_free(nullptr)
+    if (ptr == nullptr) {
+        return;
+    }
+
+    // Update memory statistics
     default_buffer.stats.nactive--;
 }
 
