@@ -8,15 +8,13 @@
 #include <sys/mman.h>
 // Additional includes
 #include <cmath>
+#include <iostream>
 
 
 struct m61_memory_buffer {
     char* buffer;
     size_t pos = 0;
     size_t size = 8 << 20; /* 8 MiB */
-
-    // Tentative global object to have persistent statistics across function calls
-    m61_statistics stats;
 
     m61_memory_buffer();
     ~m61_memory_buffer();
@@ -42,6 +40,9 @@ m61_memory_buffer::~m61_memory_buffer() {
 
 
 
+// Static global to track mem stats
+static m61_statistics stats = {0, 0, 0, 0, 0, 0, 0, 0};
+
 /// m61_malloc(sz, file, line)
 ///    Returns a pointer to `sz` bytes of freshly-allocated dynamic memory.
 ///    The memory is not initialized. If `sz == 0`, then m61_malloc may
@@ -54,7 +55,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     // Your code here.
     // m61_malloc(0) returns the nullptr. Counts as a successful, inactive allocation.
     if (sz == 0) {
-        default_buffer.stats.ntotal++;
+        stats.ntotal++;
         return nullptr;
     }
 
@@ -70,8 +71,8 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     if (default_buffer.pos + allotment > default_buffer.size) {
         // Not enough space left in default buffer for allocation
         // Update stats with failed allocation
-        default_buffer.stats.nfail++;
-        default_buffer.stats.fail_size += sz;
+        stats.nfail++;
+        stats.fail_size += sz;
         return nullptr;
     }
 
@@ -81,10 +82,16 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     
     // My code also here.
     // After successful allocation, update stats
-    default_buffer.stats.nactive++;
-    default_buffer.stats.active_size += sz;
-    default_buffer.stats.ntotal++;
-    default_buffer.stats.total_size += sz;
+    stats.nactive++;
+    stats.active_size += sz;
+    stats.ntotal++;
+    stats.total_size += sz;
+    if ((uintptr_t)ptr < stats.heap_min) {
+        stats.heap_min = (uintptr_t)ptr;
+    }
+    if ((uintptr_t)ptr> stats.heap_max) {
+        stats.heap_max = (uintptr_t)ptr + allotment - 1;
+    }
 
     return ptr;
 }
@@ -107,7 +114,7 @@ void m61_free(void* ptr, const char* file, int line) {
     }
 
     // Update memory statistics
-    default_buffer.stats.nactive--;
+    stats.nactive--;
 }
 
 
@@ -133,7 +140,7 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
 
 m61_statistics m61_get_statistics() {
     // Your code here.
-    return default_buffer.stats;
+    return stats;
 }
 
 
