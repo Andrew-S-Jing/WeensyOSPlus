@@ -13,6 +13,9 @@ struct m61_memory_buffer {
     size_t pos = 0;
     size_t size = 8 << 20; /* 8 MiB */
 
+    // Tentative global object to have persistent statistics across function calls
+    m61_statistics stats;
+
     m61_memory_buffer();
     ~m61_memory_buffer();
 };
@@ -45,15 +48,29 @@ m61_memory_buffer::~m61_memory_buffer() {
 
 void* m61_malloc(size_t sz, const char* file, int line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
+
     // Your code here.
+
+
     if (default_buffer.pos + sz > default_buffer.size) {
         // Not enough space left in default buffer for allocation
+        // Update stats with failed allocation
+        default_buffer.stats.nfail++;
+        default_buffer.stats.fail_size += sz;
         return nullptr;
     }
 
     // Otherwise there is enough space; claim the next `sz` bytes
     void* ptr = &default_buffer.buffer[default_buffer.pos];
     default_buffer.pos += sz;
+    
+    // My code also here.
+    // After successful allocation, update stats
+    default_buffer.stats.nactive++;
+    default_buffer.stats.active_size += sz;
+    default_buffer.stats.ntotal++;
+    default_buffer.stats.total_size += sz;
+
     return ptr;
 }
 
@@ -67,7 +84,9 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 void m61_free(void* ptr, const char* file, int line) {
     // avoid uninitialized variable warnings
     (void) ptr, (void) file, (void) line;
-    // Your code here. The handout code does nothing!
+
+    // Your code here.
+    default_buffer.stats.nactive--;
 }
 
 
@@ -93,9 +112,7 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
 
 m61_statistics m61_get_statistics() {
     // Your code here.
-    // The handout code sets all statistics to enormous numbers.
-    m61_statistics stats;
-    return stats;
+    return default_buffer.stats;
 }
 
 
