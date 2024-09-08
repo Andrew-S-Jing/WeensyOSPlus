@@ -6,6 +6,8 @@
 #include <cinttypes>
 #include <cassert>
 #include <sys/mman.h>
+// Additional includes
+#include <cmath>
 
 
 struct m61_memory_buffer {
@@ -56,7 +58,16 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         return nullptr;
     }
 
-    if (default_buffer.pos + sz > default_buffer.size) {
+    // Enforce alignof(std::max_align_t) as the quantum of malloc sizes
+    const size_t quantum = alignof(std::max_align_t);
+    size_t allotment = sz;
+    size_t misalign = sz % quantum;
+    // Align allocation to alignof(std::max_align_t)
+    if (misalign != 0) {
+        allotment += quantum - misalign;
+    }
+
+    if (default_buffer.pos + allotment > default_buffer.size) {
         // Not enough space left in default buffer for allocation
         // Update stats with failed allocation
         default_buffer.stats.nfail++;
@@ -66,7 +77,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     // Otherwise there is enough space; claim the next `sz` bytes
     void* ptr = &default_buffer.buffer[default_buffer.pos];
-    default_buffer.pos += sz;
+    default_buffer.pos += allotment;
     
     // My code also here.
     // After successful allocation, update stats
