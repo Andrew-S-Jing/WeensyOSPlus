@@ -41,7 +41,7 @@ m61_memory_buffer::~m61_memory_buffer() {
 
 
 // Static global to track mem stats
-static m61_statistics stats = {0, 0, 0, 0, 0, 0, 0, 0};
+static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
 
 /// m61_malloc(sz, file, line)
 ///    Returns a pointer to `sz` bytes of freshly-allocated dynamic memory.
@@ -89,7 +89,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     if ((uintptr_t)ptr < stats.heap_min) {
         stats.heap_min = (uintptr_t)ptr;
     }
-    if ((uintptr_t)ptr> stats.heap_max) {
+    if ((uintptr_t)ptr + allotment - 1 > stats.heap_max) {
         stats.heap_max = (uintptr_t)ptr + allotment - 1;
     }
 
