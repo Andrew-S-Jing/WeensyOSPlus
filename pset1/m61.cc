@@ -68,7 +68,9 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         allotment += quantum - misalign;
     }
 
-    if (default_buffer.pos + allotment > default_buffer.size || default_buffer.pos + allotment == 0 || allotment == 0) {
+    // Detect overflows allotment and default_buffer.pos + allotment
+    bool overflow = sz > SIZE_MAX - (quantum - misalign) || default_buffer.pos > SIZE_MAX - allotment;
+    if (default_buffer.pos + allotment > default_buffer.size || overflow) {
         // Not enough space left in default buffer for allocation
         // Update stats with failed allocation
         stats.nfail++;
