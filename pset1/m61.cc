@@ -129,6 +129,13 @@ void m61_free(void* ptr, const char* file, int line) {
 
 void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
     // Your code here (not needed for first tests).
+    // Detect overflow in count * sz
+    bool overflow = sz != 0 && count > SIZE_MAX / sz;
+    if (overflow) {
+        stats.nfail++;
+        return nullptr;
+    }
+
     void* ptr = m61_malloc(count * sz, file, line);
     if (ptr) {
         memset(ptr, 0, count * sz);
