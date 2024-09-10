@@ -157,11 +157,11 @@ m61_statistics m61_get_statistics() {
 ///    Prints the current memory statistics.
 
 void m61_print_statistics() {
-    m61_statistics stats = m61_get_statistics();
+    m61_statistics local_stats = m61_get_statistics();
     printf("alloc count: active %10llu   total %10llu   fail %10llu\n",
-           stats.nactive, stats.ntotal, stats.nfail);
+           local_stats.nactive, local_stats.ntotal, local_stats.nfail);
     printf("alloc size:  active %10llu   total %10llu   fail %10llu\n",
-           stats.active_size, stats.total_size, stats.fail_size);
+           local_stats.active_size, local_stats.total_size, local_stats.fail_size);
 }
 
 
