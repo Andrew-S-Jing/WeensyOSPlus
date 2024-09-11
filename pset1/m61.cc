@@ -81,11 +81,11 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         default_buffer.pos += allotment;
     } else {
         // If space at an inactive chunk of memory, claim `allotment` bytes
-        for (auto elt = inactives.begin(); elt != inactives.end(); elt++) {
-            if (allotment <= elt->second) {
-                ptr = elt->first;
-                inactives.insert({(void*)((uintptr_t)ptr + allotment), elt->second - allotment});
-                inactives.erase(elt);
+        for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
+            if (allotment <= iter->second) {
+                ptr = iter->first;
+                inactives.insert({(void*)((uintptr_t)ptr + allotment), iter->second - allotment});
+                inactives.erase(iter);
                 break;
             }
         }
