@@ -41,9 +41,10 @@ m61_memory_buffer::~m61_memory_buffer() {
 
 
 
-// Static global to track mem stats
+// Static global to track mem stats and overhead
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
-static std::map actives, frees;
+static std::map<void*, size_t> actives, inactives;
+static std::pair<void*, size_t> last_malloc, last_free;
 
 /// m61_malloc(sz, file, line)
 ///    Returns a pointer to `sz` bytes of freshly-allocated dynamic memory.
@@ -54,7 +55,6 @@ static std::map actives, frees;
 void* m61_malloc(size_t sz, const char* file, int line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
 
-    // Your code here.
     // m61_malloc(0) returns the nullptr. Counts as a successful, inactive allocation.
     if (sz == 0) {
         stats.ntotal++;
@@ -84,7 +84,6 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     void* ptr = &default_buffer.buffer[default_buffer.pos];
     default_buffer.pos += allotment;
     
-    // My code also here.
     // After successful allocation, update stats
     stats.nactive++;
     stats.active_size += sz;
@@ -96,6 +95,10 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     if ((uintptr_t)ptr + allotment - 1 > stats.heap_max) {
         stats.heap_max = (uintptr_t)ptr + allotment - 1;
     }
+
+    // Add overhead to actives map
+    last_malloc = {ptr, allotment};
+    actives.insert(last_malloc);
 
     return ptr;
 }
@@ -119,6 +122,15 @@ void m61_free(void* ptr, const char* file, int line) {
 
     // Update memory statistics
     stats.nactive--;
+
+    // Add overhead to inactives map
+    last_free = {ptr, actives.at(ptr)};
+    inactives.insert(actives.extract(ptr));
+
+    // TEMP22: Catch case of last_malloc == this free call
+    if (last_malloc == last_free) {
+        default_buffer.pos -= last_malloc.second;
+    }
 }
 
 
