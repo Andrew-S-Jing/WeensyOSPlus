@@ -72,17 +72,32 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     // Detect overflows allotment and default_buffer.pos + allotment
     bool overflow = sz > SIZE_MAX - (quantum - misalign) || default_buffer.pos > SIZE_MAX - allotment;
-    if (default_buffer.pos + allotment > default_buffer.size || overflow) {
+    
+    // Check for space in tail of buffer or inactives list (find_free_space())
+    void* ptr = nullptr;
+    if (default_buffer.pos + allotment <= default_buffer.size) {
+        // If space at tail of buffer, claim next `allotment` bytes
+        ptr = &default_buffer.buffer[default_buffer.pos];
+        default_buffer.pos += allotment;
+    } else {
+        // If space at an inactive chunk of memory, claim `allotment` bytes
+        for (auto elt = inactives.begin(); elt != inactives.end(); elt++) {
+            if (allotment <= elt->second) {
+                ptr = elt->first;
+                inactives.erase(elt);
+                break;
+            }
+        }
+    }
+
+    // Handle cases of not enough space or overflow
+    if (ptr == nullptr || overflow) {
         // Not enough space left in default buffer for allocation
         // Update stats with failed allocation
         stats.nfail++;
         stats.fail_size += sz;
         return nullptr;
     }
-
-    // Otherwise there is enough space; claim the next `sz` bytes
-    void* ptr = &default_buffer.buffer[default_buffer.pos];
-    default_buffer.pos += allotment;
     
     // After successful allocation, update stats
     stats.nactive++;
@@ -126,11 +141,6 @@ void m61_free(void* ptr, const char* file, int line) {
     // Add overhead to inactives map
     last_free = {ptr, actives.at(ptr)};
     inactives.insert(actives.extract(ptr));
-
-    // TEMP22: Catch case of last_malloc == this free call
-    if (last_malloc == last_free) {
-        default_buffer.pos -= last_malloc.second;
-    }
 }
 
 
