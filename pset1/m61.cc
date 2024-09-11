@@ -9,6 +9,7 @@
 // Additional includes
 #include <cmath>
 #include <iostream>
+#include <map>
 
 
 struct m61_memory_buffer {
@@ -42,6 +43,7 @@ m61_memory_buffer::~m61_memory_buffer() {
 
 // Static global to track mem stats
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
+static std::map actives, frees;
 
 /// m61_malloc(sz, file, line)
 ///    Returns a pointer to `sz` bytes of freshly-allocated dynamic memory.
