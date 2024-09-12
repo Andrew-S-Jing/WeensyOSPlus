@@ -43,10 +43,12 @@ m61_memory_buffer::~m61_memory_buffer() {
 
 // Static global to track mem stats and overhead
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
-typedef std::map<uintptr_t, size_t> memlist;
-static memlist actives;
-static memlist inactives = {{(uintptr_t)default_buffer.buffer, default_buffer.size}};
-static std::pair<uintptr_t, size_t> last_malloc, last_free;
+// Elt in actives is {ptr, {allotment, extra}}
+static std::map<uintptr_t, std::pair<size_t, size_t>> actives;
+static std::pair<uintptr_t, std::pair<size_t, size_t>> last_malloc;
+// Elt in inactives is {ptr, allotment}
+static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffer, default_buffer.size}};
+static std::pair<uintptr_t, size_t> last_free;
 
 /// m61_malloc(sz, file, line)
 ///    Returns a pointer to `sz` bytes of freshly-allocated dynamic memory.
@@ -67,16 +69,15 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     const size_t quantum = alignof(std::max_align_t);
     size_t allotment = sz;
     size_t misalign = sz % quantum;
+    size_t extra = 0;
     // Align allocation to alignof(std::max_align_t)
     if (misalign != 0) {
-        allotment += quantum - misalign;
+        extra = quantum - misalign;
+        allotment += extra;
     }
 
-    // Detect overflows allotment
-    bool overflow = sz > SIZE_MAX - (quantum - misalign);
-    // Handle cases of not enough space or overflow
-    if (overflow) {
-        // Not enough space left in default buffer for allocation
+    // Handle cases of overflow
+    if (sz > SIZE_MAX - extra) {
         // Update stats with failed allocation
         stats.nfail++;
         stats.fail_size += sz;
@@ -86,7 +87,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     // Check for space in tail of buffer or inactives list (find_free_space())
     void* ptr = nullptr;
     // If space at an inactive chunk of memory, claim `allotment` bytes
-    for (memlist::iterator iter = inactives.begin(); iter != inactives.end(); iter++) {
+    for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
         if (allotment <= iter->second) {
             ptr = (void*)iter->first;
             inactives.insert({((uintptr_t)ptr + allotment), iter->second - allotment});
@@ -117,7 +118,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     }
 
     // Add overhead to actives map
-    last_malloc = {(uintptr_t)ptr, allotment};
+    last_malloc = {(uintptr_t)ptr, {allotment, extra}};
     actives.insert(last_malloc);
 
     return ptr;
@@ -140,25 +141,29 @@ void m61_free(void* ptr, const char* file, int line) {
         return;
     }
 
-    // Free mem and pull information into locals
-    last_free = {(uintptr_t)ptr, actives.at((uintptr_t)ptr)};
-    inactives.insert(actives.extract((uintptr_t)ptr));
-    size_t sz_freed = last_free.second;
+    // Free (from actives) and pull information into locals
+    auto freed_elt = actives.at((uintptr_t)ptr);
+    actives.erase((uintptr_t)ptr);
+    size_t allotment = freed_elt.first;
+    size_t extra = freed_elt.second;
+
+    // Free (into inactives)
+    inactives.insert({(uintptr_t)ptr, allotment});
 
     // Update memory statistics
     stats.nactive--;
-    stats.active_size -= sz_freed;
+    stats.active_size -= allotment - extra;
 
     // Coalesce up
-    memlist::iterator iter = inactives.find((uintptr_t)ptr);
-    memlist::iterator next = iter;
+    auto iter = inactives.find((uintptr_t)ptr);
+    auto next = iter;
     next++;
     if (iter != inactives.end() && next != inactives.end() && iter->first + iter->second == next->first) {
         iter->second += next->second;
         inactives.erase(next);
     }
     // Coalesce down
-    memlist::iterator prev = iter;
+    auto prev = iter;
     prev--;
     if (iter != inactives.begin() && prev != inactives.begin() && prev->first + prev->second == iter->first) {
         prev->second += iter->second;
