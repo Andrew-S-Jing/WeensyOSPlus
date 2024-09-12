@@ -90,7 +90,9 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
         if (allotment <= iter->second) {
             ptr = (void*)iter->first;
-            inactives.insert({((uintptr_t)ptr + allotment), iter->second - allotment});
+            if (allotment != iter->second) {
+                inactives.insert({((uintptr_t)ptr + allotment), iter->second - allotment});
+            }
             inactives.erase(iter);
             break;
         }
