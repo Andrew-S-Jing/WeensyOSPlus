@@ -43,7 +43,8 @@ m61_memory_buffer::~m61_memory_buffer() {
 
 // Static global to track mem stats and overhead
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
-static std::map<uintptr_t, size_t> actives, inactives;
+typedef std::map<uintptr_t, size_t> memlist;
+static memlist actives, inactives;
 static std::pair<uintptr_t, size_t> last_malloc, last_free;
 
 /// m61_malloc(sz, file, line)
@@ -72,6 +73,14 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     // Detect overflows allotment and default_buffer.pos + allotment
     bool overflow = sz > SIZE_MAX - (quantum - misalign) || default_buffer.pos > SIZE_MAX - allotment;
+    // Handle cases of not enough space or overflow
+    if (overflow) {
+        // Not enough space left in default buffer for allocation
+        // Update stats with failed allocation
+        stats.nfail++;
+        stats.fail_size += sz;
+        return nullptr;
+    }
     
     // Check for space in tail of buffer or inactives list (find_free_space())
     void* ptr = nullptr;
@@ -81,7 +90,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         default_buffer.pos += allotment;
     } else {
         // If space at an inactive chunk of memory, claim `allotment` bytes
-        for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
+        for (memlist::iterator iter = inactives.begin(); iter != inactives.end(); iter++) {
             if (allotment <= iter->second) {
                 ptr = (void*)iter->first;
                 inactives.insert({((uintptr_t)ptr + allotment), iter->second - allotment});
@@ -92,7 +101,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     }
 
     // Handle cases of not enough space or overflow
-    if (ptr == nullptr || overflow) {
+    if (ptr == nullptr) {
         // Not enough space left in default buffer for allocation
         // Update stats with failed allocation
         stats.nfail++;
@@ -136,12 +145,30 @@ void m61_free(void* ptr, const char* file, int line) {
         return;
     }
 
-    // Update memory statistics
-    stats.nactive--;
-
-    // Add overhead to inactives map
+    // Free mem and pull information into locals
     last_free = {(uintptr_t)ptr, actives.at((uintptr_t)ptr)};
     inactives.insert(actives.extract((uintptr_t)ptr));
+    size_t sz_freed = last_free.second;
+
+    // Update memory statistics
+    stats.nactive--;
+    stats.active_size -= sz_freed;
+
+    // Coalesce up
+    memlist::iterator iter = inactives.find((uintptr_t)ptr);
+    memlist::iterator next = iter;
+    next++;
+    if (iter != inactives.end() && next != inactives.end() && iter->first + iter->second == next->first) {
+        iter->second += next->second;
+        inactives.erase(next);
+    }
+    // Coalesce down
+    memlist::iterator prev = iter;
+    prev--;
+    if (iter != inactives.begin() && prev != inactives.begin() && prev->first + prev->second == iter->first) {
+        prev->second += iter->second;
+        inactives.erase(iter);
+    }
 }
 
 
