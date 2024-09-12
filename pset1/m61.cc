@@ -10,6 +10,7 @@
 #include <cmath>
 #include <iostream>
 #include <map>
+#include <set>
 
 
 struct m61_memory_buffer {
@@ -45,10 +46,9 @@ m61_memory_buffer::~m61_memory_buffer() {
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
 // Elt in actives is {ptr, {allotment, extra}}
 static std::map<uintptr_t, std::pair<size_t, size_t>> actives;
-static std::pair<uintptr_t, std::pair<size_t, size_t>> last_malloc;
 // Elt in inactives is {ptr, allotment}
 static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffer, default_buffer.size}};
-static std::pair<uintptr_t, size_t> last_free;
+static std::set<void*> frees;
 
 /// m61_malloc(sz, file, line)
 ///    Returns a pointer to `sz` bytes of freshly-allocated dynamic memory.
@@ -104,6 +104,12 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         stats.fail_size += sz;
         return nullptr;
     }
+
+    // Add overhead to actives map
+    actives.insert({(uintptr_t)ptr, {allotment, extra}});
+
+    // Update set of frees
+    frees.erase(ptr);
     
     // After successful allocation, update stats
     stats.nactive++;
@@ -117,10 +123,6 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         stats.heap_max = (uintptr_t)ptr + allotment - 1;
     }
 
-    // Add overhead to actives map
-    last_malloc = {(uintptr_t)ptr, {allotment, extra}};
-    actives.insert(last_malloc);
-
     return ptr;
 }
 
@@ -132,23 +134,39 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 ///    `file`:`line`.
 
 void m61_free(void* ptr, const char* file, int line) {
-    // avoid uninitialized variable warnings
-    (void) file, (void) line;
-
-    // Your code here.
     // Do nothing upon m61_free(nullptr)
     if (ptr == nullptr) {
         return;
     }
 
+    // Find ptr in actives
+    auto elt_to_free = actives.find((uintptr_t)ptr);
+
+    // Error Detection
+    if (frees.find(ptr) != frees.end()) {
+        //Double Free
+        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", double free\n";
+        abort();
+    } else if (ptr < default_buffer.buffer || ptr >= default_buffer.buffer + default_buffer.size) {
+        // Non-Heap Free
+        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not in heap\n";
+        abort();
+    } else if (elt_to_free == actives.end()) {
+        // Wild Free
+        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not allocated\n";
+        abort();
+    }
+
     // Free (from actives) and pull information into locals
-    auto freed_elt = actives.at((uintptr_t)ptr);
+    size_t allotment = elt_to_free->second.first;
+    size_t extra = elt_to_free->second.second;
     actives.erase((uintptr_t)ptr);
-    size_t allotment = freed_elt.first;
-    size_t extra = freed_elt.second;
 
     // Free (into inactives)
     inactives.insert({(uintptr_t)ptr, allotment});
+
+    // Add to set of frees
+    frees.insert(ptr);
 
     // Update memory statistics
     stats.nactive--;
