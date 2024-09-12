@@ -70,7 +70,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     size_t allotment = sz;
     size_t misalign = sz % quantum;
     size_t extra = 0;
-    // Align allocation to alignof(std::max_align_t)
+    // Align allotment size to alignof(std::max_align_t)
     if (misalign != 0) {
         extra = quantum - misalign;
         allotment += extra;
