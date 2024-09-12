@@ -44,7 +44,8 @@ m61_memory_buffer::~m61_memory_buffer() {
 // Static global to track mem stats and overhead
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
 typedef std::map<uintptr_t, size_t> memlist;
-static memlist actives, inactives;
+static memlist actives;
+static memlist inactives = {{(uintptr_t)default_buffer.buffer, default_buffer.size}};
 static std::pair<uintptr_t, size_t> last_malloc, last_free;
 
 /// m61_malloc(sz, file, line)
@@ -71,8 +72,8 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         allotment += quantum - misalign;
     }
 
-    // Detect overflows allotment and default_buffer.pos + allotment
-    bool overflow = sz > SIZE_MAX - (quantum - misalign) || default_buffer.pos > SIZE_MAX - allotment;
+    // Detect overflows allotment
+    bool overflow = sz > SIZE_MAX - (quantum - misalign);
     // Handle cases of not enough space or overflow
     if (overflow) {
         // Not enough space left in default buffer for allocation
@@ -84,19 +85,13 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     
     // Check for space in tail of buffer or inactives list (find_free_space())
     void* ptr = nullptr;
-    if (default_buffer.pos + allotment <= default_buffer.size) {
-        // If space at tail of buffer, claim next `allotment` bytes
-        ptr = &default_buffer.buffer[default_buffer.pos];
-        default_buffer.pos += allotment;
-    } else {
-        // If space at an inactive chunk of memory, claim `allotment` bytes
-        for (memlist::iterator iter = inactives.begin(); iter != inactives.end(); iter++) {
-            if (allotment <= iter->second) {
-                ptr = (void*)iter->first;
-                inactives.insert({((uintptr_t)ptr + allotment), iter->second - allotment});
-                inactives.erase(iter);
-                break;
-            }
+    // If space at an inactive chunk of memory, claim `allotment` bytes
+    for (memlist::iterator iter = inactives.begin(); iter != inactives.end(); iter++) {
+        if (allotment <= iter->second) {
+            ptr = (void*)iter->first;
+            inactives.insert({((uintptr_t)ptr + allotment), iter->second - allotment});
+            inactives.erase(iter);
+            break;
         }
     }
 
