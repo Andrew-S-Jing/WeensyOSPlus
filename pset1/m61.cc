@@ -76,7 +76,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         allotment += extra;
     }
 
-    // Handle cases of overflow
+    // Handle cases of overflow (handled before finding allocation space for efficiency)
     if (sz > SIZE_MAX - extra) {
         // Update stats with failed allocation
         stats.nfail++;
@@ -99,9 +99,8 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         }
     }
 
-    // Handle cases of not enough space or overflow
+    // Handle cases of no space found in inactives
     if (ptr == nullptr) {
-        // Not enough space left in default buffer for allocation
         // Update stats with failed allocation
         stats.nfail++;
         stats.fail_size += sz;
@@ -164,10 +163,8 @@ void m61_free(void* ptr, const char* file, int line) {
     size_t allotment = elt_to_free->second.first;
     size_t extra = elt_to_free->second.second;
     actives.erase((uintptr_t)ptr);
-
     // Free (into inactives)
     inactives.insert({(uintptr_t)ptr, allotment});
-
     // Add to set of frees
     frees.insert(ptr);
 
@@ -201,7 +198,6 @@ void m61_free(void* ptr, const char* file, int line) {
 ///    also return `nullptr` if `count == 0` or `size == 0`.
 
 void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
-    // Your code here (not needed for first tests).
     // Detect overflow in count * sz
     bool overflow = sz != 0 && count > SIZE_MAX / sz;
     if (overflow) {
@@ -221,7 +217,6 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
 ///    Return the current memory statistics.
 
 m61_statistics m61_get_statistics() {
-    // Your code here.
     return stats;
 }
 
