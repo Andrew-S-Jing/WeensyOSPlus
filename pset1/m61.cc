@@ -87,6 +87,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     // Check for space in tail of buffer or inactives list (find_free_space())
     void* ptr = nullptr;
     // If space at an inactive chunk of memory, claim `allotment` bytes
+    // Consulted google on the step-search through the values of inactives (See Citation 1)
     for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
         if (allotment <= iter->second) {
             ptr = (void*)iter->first;
