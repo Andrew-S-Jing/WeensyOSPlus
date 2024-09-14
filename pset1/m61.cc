@@ -57,46 +57,13 @@ static const size_t quantum = alignof(std::max_align_t);
 // Global to track mem stats and overhead
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
 
-
-// meta is the structure of the metatdata carried by actives
-struct meta {
-    size_t size;
-    uintptr_t lower_border_first;
-    uintptr_t upper_border_last;
-};
 // Elt in actives is {ptr, metadata}
 static std::map<uintptr_t, meta> actives;
-// Elt in inactives is {ptr, allotment}
+// Elt in inactives is {ptr, allotment}, allotment is defined below by sz_to_allot()
 static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffer + BORD_SZ, default_buffer.size}};
+// Tracks set of previous freed pointers
 static std::set<void*> frees;
 
-
-/// Helper to safely translate from size to allotment
-/// Allotment is the size of an m61_malloc, but also accounting for the fence-post borders and alignment adjustments
-/// sz_to_allot(sz) returns an adjusted allotment, will return 0 if overflow is detected
-
-size_t sz_to_allot(size_t sz) {
-    // Prepare for allotment adjustments
-    size_t allotment = sz;
-    size_t misalign = sz % quantum;
-    size_t extra = 0;
-    if (misalign != 0) {
-        extra = quantum - misalign;
-    }
-
-    // Detect overflow
-    if (allotment > SIZE_MAX - (extra + 2 * BORD_SZ)) {
-        return 0;
-    }
-
-    // Align allotment size to alignof(std::max_align_t)
-    allotment += extra;    
-    // Add two border zones of size BORD_SZ to allotment size
-    allotment += 2 * BORD_SZ;
-
-    // Return adjusted value
-    return allotment;
-}
 
 
 /// m61_malloc(sz, file, line)
@@ -204,7 +171,7 @@ void m61_free(void* ptr, const char* file, int line) {
         abort();
     }
     // Non-Heap Free
-    if (ptr - BORD_SZ < default_buffer.buffer || ptr >= default_buffer.buffer + default_buffer.size) {
+    if ((void*)((uintptr_t)ptr - BORD_SZ) < default_buffer.buffer || ptr >= default_buffer.buffer + default_buffer.size) {
         std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not in heap\n";
         abort();
     }
@@ -296,6 +263,35 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
         memset(ptr, 0, count * sz);
     }
     return ptr;
+}
+
+
+/// sz_to_allot(sz)
+///     Helper to safely translate from size to allotment
+///     Allotment is the size of an m61_malloc, but also accounting for the fence-post borders and alignment adjustments
+///     sz_to_allot(sz) returns an adjusted allotment, will return 0 if overflow is detected
+
+size_t sz_to_allot(size_t sz) {
+    // Prepare for allotment adjustments
+    size_t allotment = sz;
+    size_t misalign = sz % quantum;
+    size_t extra = 0;
+    if (misalign != 0) {
+        extra = quantum - misalign;
+    }
+
+    // Detect overflow
+    if (allotment > SIZE_MAX - (extra + 2 * BORD_SZ)) {
+        return 0;
+    }
+
+    // Align allotment size to alignof(std::max_align_t)
+    allotment += extra;    
+    // Add two border zones of size BORD_SZ to allotment size
+    allotment += 2 * BORD_SZ;
+
+    // Return adjusted value
+    return allotment;
 }
 
 

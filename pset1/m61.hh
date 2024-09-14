@@ -8,6 +8,26 @@
 #include <random>
 
 
+/// ADDED HEADER DEFINITIONS:
+
+/// meta
+///     Structure of the metatdata carried by actives
+struct meta {
+    size_t size;
+    uintptr_t lower_border_first;
+    uintptr_t upper_border_last;
+};
+
+/// sz_to_allot(sz)
+///     Helper to safely translate from size to allotment
+///     Allotment is the size of an m61_malloc, but also accounting for the fence-post borders and alignment adjustments
+///     sz_to_allot(sz) returns an adjusted allotment, will return 0 if overflow is detected
+size_t sz_to_allot(size_t sz);
+
+
+
+/// DISPO HEADER DEFINITIONS:
+
 /// m61_malloc(sz, file, line)
 ///    Return a pointer to `sz` bytes of newly-allocated dynamic memory.
 void* m61_malloc(size_t sz, const char* file = __builtin_FILE(), int line = __builtin_LINE());
