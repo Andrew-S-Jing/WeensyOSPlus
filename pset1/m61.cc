@@ -186,6 +186,15 @@ void m61_free(void* ptr, const char* file, int line) {
     // Wild Free
     if (elt_to_free == actives.end()) {
         std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not allocated\n";
+        auto prev_active = actives.upper_bound((uintptr_t)ptr);
+        prev_active--;
+        if (prev_active != actives.begin()) {
+            uintptr_t prev_ptr = prev_active->first;
+            meta prev_metadata = prev_active->second;
+            if (prev_ptr <= (uintptr_t)ptr && (uintptr_t)ptr < prev_ptr + prev_metadata.size) {
+                std::cerr << "  " << prev_metadata.file << ':' << prev_metadata.line << ": " << ptr << " is " << (uintptr_t)ptr - prev_ptr << " bytes inside a " << prev_metadata.size << " byte region allocated here" << '\n';
+            }
+        }
         abort();
     }
 
