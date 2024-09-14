@@ -1,3 +1,5 @@
+// TODO: Fix runon lines of code
+
 #include "m61.hh"
 #include <cstdlib>
 #include <cstddef>
@@ -57,7 +59,7 @@ static const size_t quantum = alignof(std::max_align_t);
 // Metadata objects
 // Memory statistics tracker
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
-// Elt in actives is {ptr, metadata}
+// Elt in actives is {ptr, metadata} (See struct meta in m61.hh)
 static std::map<uintptr_t, meta> actives;
 // Elt in inactives is {ptr, allotment}, allotment is defined below by sz_to_allot()
 static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffer + BORD_SZ, default_buffer.size}};
