@@ -54,9 +54,9 @@ m61_memory_buffer::~m61_memory_buffer() {
 // Constant of system alignment
 static const size_t quantum = alignof(std::max_align_t);
 
-// Global to track mem stats and overhead
+// Metadata objects
+// Memory statistics tracker
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
-
 // Elt in actives is {ptr, metadata}
 static std::map<uintptr_t, meta> actives;
 // Elt in inactives is {ptr, allotment}, allotment is defined below by sz_to_allot()
@@ -73,7 +73,6 @@ static std::set<void*> frees;
 ///    The allocation request was made at source code location `file`:`line`.
 
 void* m61_malloc(size_t sz, const char* file, int line) {
-    (void) file, (void) line;   // avoid uninitialized variable warnings
 
     // m61_malloc(0) returns the nullptr. Counts as a successful, inactive allocation.
     if (sz == 0) {
@@ -118,7 +117,15 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     uintptr_t lower_border_first = (uintptr_t)ptr - BORD_SZ;
     uintptr_t upper_border_last = lower_border_first + allotment - 1;
     // Add overhead to actives map
-    actives.insert({(uintptr_t)ptr, {sz, lower_border_first, upper_border_last}});
+    meta metadata =
+        {
+            sz,                     // metadata.size
+            lower_border_first,     // metadata.lower_border_first
+            upper_border_last,      // metadata.upper_border_last
+            file,                   // metadata.file
+            line                    // metadata.line
+        };
+    actives.insert({(uintptr_t)ptr, metadata});
 
     // Update set of frees
     frees.erase(ptr);
@@ -154,6 +161,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 ///    `file`:`line`.
 
 void m61_free(void* ptr, const char* file, int line) {
+
     // Do nothing upon m61_free(nullptr)
     if (ptr == nullptr) {
         return;
@@ -251,6 +259,7 @@ void m61_free(void* ptr, const char* file, int line) {
 ///    also return `nullptr` if `count == 0` or `size == 0`.
 
 void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
+
     // Detect overflow in count * sz
     bool overflow = sz != 0 && count > SIZE_MAX / sz;
     if (overflow) {
@@ -272,6 +281,7 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
 ///     sz_to_allot(sz) returns an adjusted allotment, will return 0 if overflow is detected
 
 size_t sz_to_allot(size_t sz) {
+    
     // Prepare for allotment adjustments
     size_t allotment = sz;
     size_t misalign = sz % quantum;
@@ -324,8 +334,8 @@ void m61_print_leak_report() {
     if (!actives.empty()) {
         for (auto iter = actives.begin(); iter != actives.end(); iter++) {
             void* ptr = (void*)iter->first;
-            size_t sz = iter->second.size;
-            std::cout << "LEAK CHECK: " << "file" << ':' << "line" << ": allocated object " << ptr << " with size " << sz << '\n';
+            meta metadata = iter->second;
+            std::cout << "LEAK CHECK: " << metadata.file << ':' << metadata.line << ": allocated object " << ptr << " with size " << metadata.size << '\n';
         }
     }
 }

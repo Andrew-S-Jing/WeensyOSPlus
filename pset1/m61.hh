@@ -16,6 +16,8 @@ struct meta {
     size_t size;
     uintptr_t lower_border_first;
     uintptr_t upper_border_last;
+    const char* file;
+    int line;
 };
 
 /// sz_to_allot(sz)
