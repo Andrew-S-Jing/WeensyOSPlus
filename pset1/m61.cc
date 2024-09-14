@@ -197,10 +197,23 @@ void m61_free(void* ptr, const char* file, int line) {
     // Error Detection (Cont.)
     // Fence-Post Write (Border Write)
     if (BORD_SZ != 0) {
-        // TODO: Only checks 1st byte of border regions! Make for loop to iterate through the whole border regions
-        if (*(char*)pre_border_ptr != BORD_CHAR || *(char*)((uintptr_t)pre_border_ptr + allotment - (extra + BORD_SZ)) != BORD_CHAR) {
-            std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
-            abort();
+        // Check fence-post writes on lower border
+        char* lower_border_begin = (char*)pre_border_ptr;
+        for (size_t i = 0; i < BORD_SZ; i++) {
+            if (lower_border_begin[i] != BORD_CHAR) {
+                // It's possible to specify the Lower Border error, but this would fail CS61 tests
+                std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
+                abort();
+            }
+        }
+        // Check fence-post writes on upper border
+        char* upper_border_end = (char*)((uintptr_t)pre_border_ptr + allotment - 1);
+        for (size_t i = 0; i < BORD_SZ + extra; i++) {
+            if (upper_border_end[-i] != BORD_CHAR) {
+                // It's possible to specify the Upper Border error, but this would fail CS61 tests
+                std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
+                abort();
+            }
         }
     }
     
