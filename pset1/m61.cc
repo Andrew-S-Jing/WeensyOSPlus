@@ -64,8 +64,8 @@ struct meta {
 };
 // Elt in actives is {ptr, metadata}
 static std::map<uintptr_t, meta> actives;
-// Elt in inactives is {lower_border_first, allotment}
-static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffer, default_buffer.size}};
+// Elt in inactives is {ptr, allotment}
+static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffer + BORD_SZ, default_buffer.size}};
 static std::set<void*> frees;
 
 
@@ -108,14 +108,14 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     
     // Check for space in tail of buffer or inactives list (find_free_space())
-    void* lower_border_first = nullptr;
+    void* ptr = nullptr;
     // If space at an inactive chunk of memory, claim `allotment` bytes
     // See Citation "Valfind" for method to value-search in a std::map
     for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
         if (allotment <= iter->second) {
-            lower_border_first = (void*)iter->first;
+            ptr = (void*)iter->first;
             if (allotment != iter->second) {
-                inactives.insert({((uintptr_t)lower_border_first + allotment), iter->second - allotment});
+                inactives.insert({((uintptr_t)ptr + allotment), iter->second - allotment});
             }
             inactives.erase(iter);
             break;
@@ -123,7 +123,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     }
 
     // Handle cases of no space found in inactives
-    if (lower_border_first == nullptr) {
+    if (ptr == nullptr) {
         // Update stats with failed allocation
         stats.nfail++;
         stats.fail_size += sz;
@@ -131,32 +131,33 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     }
 
 
-    // Adjust ptr accounting for BORD_SZ
-    void* ptr = (void*)((uintptr_t)lower_border_first + BORD_SZ);
+    // Define border boundaries with BORD_SZ
+    uintptr_t lower_border_first = (uintptr_t)ptr - BORD_SZ;
+    uintptr_t upper_border_last = lower_border_first + allotment - 1;
     // Add overhead to actives map
-    actives.insert({(uintptr_t)ptr, {sz, allotment, (uintptr_t)lower_border_first, (uintptr_t)lower_border_first + allotment - 1}});
+    actives.insert({(uintptr_t)ptr, {sz, allotment, lower_border_first, upper_border_last}});
 
     // Update set of frees
-    frees.erase(lower_border_first);
+    frees.erase(ptr);
     
     // After successful allocation, update stats
     stats.nactive++;
     stats.active_size += sz;
     stats.ntotal++;
     stats.total_size += sz;
-    if ((uintptr_t)lower_border_first < stats.heap_min) {
-        stats.heap_min = (uintptr_t)lower_border_first;
+    if (lower_border_first < stats.heap_min) {
+        stats.heap_min = lower_border_first;
     }
-    if ((uintptr_t)lower_border_first + allotment - 1 > stats.heap_max) {
-        stats.heap_max = (uintptr_t)lower_border_first + allotment - 1;
+    if (upper_border_last > stats.heap_max) {
+        stats.heap_max = upper_border_last;
     }
 
     // Set memory in border regions to BORD_CHAR
-    memset(lower_border_first, BORD_CHAR, BORD_SZ);
-    memset((void*)((uintptr_t)lower_border_first + allotment - (extra + BORD_SZ)), BORD_CHAR, extra + BORD_SZ);
+    memset((void*)lower_border_first, BORD_CHAR, BORD_SZ);
+    memset((void*)(upper_border_last + 1 - (extra + BORD_SZ)), BORD_CHAR, extra + BORD_SZ);
 
 
-    // Return ptr adjusted for border size
+    // Return ptr
     return ptr;
 }
 
@@ -174,21 +175,18 @@ void m61_free(void* ptr, const char* file, int line) {
     }
 
 
-    // Calculate lower_border_first pointer
-    void* lower_border_first = (void*)((uintptr_t)ptr - BORD_SZ);
-
     // Find lower_border_first in actives
     auto elt_to_free = actives.find((uintptr_t)ptr);
 
 
     // Error Detection
     // Double Free
-    if (frees.find(lower_border_first) != frees.end()) {
+    if (frees.find(ptr) != frees.end()) {
         std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", double free\n";
         abort();
     }
     // Non-Heap Free
-    if (lower_border_first < default_buffer.buffer || lower_border_first >= default_buffer.buffer + default_buffer.size) {
+    if (ptr - BORD_SZ < default_buffer.buffer || ptr >= default_buffer.buffer + default_buffer.size) {
         std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not in heap\n";
         abort();
     }
@@ -200,6 +198,9 @@ void m61_free(void* ptr, const char* file, int line) {
 
 
     // Pull information into locals
+    uintptr_t lower_border_first = elt_to_free->second.lower_border_first;
+    uintptr_t upper_border_last = elt_to_free->second.upper_border_last;
+    size_t sz = elt_to_free->second.size;
     size_t allotment = elt_to_free->second.allotment;
     size_t extra = elt_to_free->second.allotment - (elt_to_free->second.size + 2 * BORD_SZ);
 
@@ -208,18 +209,16 @@ void m61_free(void* ptr, const char* file, int line) {
     // Fence-Post Write (Border Write)
     if (BORD_SZ != 0) {
         // Check fence-post writes on lower border
-        char* lower_border_begin = (char*)lower_border_first;
         for (size_t i = 0; i < BORD_SZ; i++) {
-            if (lower_border_begin[i] != BORD_CHAR) {
+            if (((char*)lower_border_first)[i] != BORD_CHAR) {
                 // It's possible to specify the Lower Border error, but this would fail CS61 tests
                 std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
                 abort();
             }
         }
         // Check fence-post writes on upper border
-        char* upper_border_end = (char*)((uintptr_t)lower_border_first + allotment - 1);
         for (size_t i = 0; i < BORD_SZ + extra; i++) {
-            if (upper_border_end[-i] != BORD_CHAR) {
+            if (((char*)upper_border_last)[-i] != BORD_CHAR) {
                 // It's possible to specify the Upper Border error, but this would fail CS61 tests
                 std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
                 abort();
@@ -231,17 +230,17 @@ void m61_free(void* ptr, const char* file, int line) {
     // Free from actives
     actives.erase((uintptr_t)ptr);
     // Free into inactives
-    inactives.insert({(uintptr_t)lower_border_first, allotment});
+    inactives.insert({(uintptr_t)ptr, allotment});
     // Add to set of frees
-    frees.insert(lower_border_first);
+    frees.insert(ptr);
 
     // Update memory statistics
     stats.nactive--;
-    stats.active_size -= allotment - (extra + 2 * BORD_SZ);
+    stats.active_size -= sz;
 
 
     // Coalesce up
-    auto iter = inactives.find((uintptr_t)lower_border_first);
+    auto iter = inactives.find((uintptr_t)ptr);
     auto next = iter;
     next++;
     if (iter != inactives.end() && next != inactives.end() && iter->first + iter->second == next->first) {
