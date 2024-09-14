@@ -61,7 +61,6 @@ static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffe
 // meta is the structure of the metatdata carried by actives
 struct meta {
     size_t size;
-    size_t allotment;
     uintptr_t lower_border_first;
     uintptr_t upper_border_last;
 };
@@ -72,7 +71,7 @@ static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffe
 static std::set<void*> frees;
 
 
-/// Helpers to safely translate from size to allotment, and allotment to size
+/// Helper to safely translate from size to allotment
 /// Allotment is the size of an m61_malloc, but also accounting for the fence-post borders and alignment adjustments
 /// sz_to_allot(sz) returns an adjusted allotment, will return 0 if overflow is detected
 
@@ -152,7 +151,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     uintptr_t lower_border_first = (uintptr_t)ptr - BORD_SZ;
     uintptr_t upper_border_last = lower_border_first + allotment - 1;
     // Add overhead to actives map
-    actives.insert({(uintptr_t)ptr, {sz, allotment, lower_border_first, upper_border_last}});
+    actives.insert({(uintptr_t)ptr, {sz, lower_border_first, upper_border_last}});
 
     // Update set of frees
     frees.erase(ptr);
@@ -220,15 +219,15 @@ void m61_free(void* ptr, const char* file, int line) {
     uintptr_t lower_border_first = elt_to_free->second.lower_border_first;
     uintptr_t upper_border_last = elt_to_free->second.upper_border_last;
     size_t sz = elt_to_free->second.size;
-    size_t allotment = elt_to_free->second.allotment;
-    size_t extra = elt_to_free->second.allotment - (elt_to_free->second.size + 2 * BORD_SZ);
+    size_t allotment = sz_to_allot(sz);
 
 
     // Error Detection (Cont.)
     // Fence-Post Write (Border Write)
     if (BORD_SZ != 0) {
         // Check fence-post writes on lower border
-        for (size_t i = 0; i < BORD_SZ; i++) {
+        size_t lower_border_sz = BORD_SZ;
+        for (size_t i = 0; i < lower_border_sz; i++) {
             if (((char*)lower_border_first)[i] != BORD_CHAR) {
                 // It's possible to specify the Lower Border error, but this would fail CS61 tests
                 std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
@@ -236,7 +235,8 @@ void m61_free(void* ptr, const char* file, int line) {
             }
         }
         // Check fence-post writes on upper border
-        for (size_t i = 0; i < BORD_SZ + extra; i++) {
+        size_t upper_border_sz = allotment - (sz + BORD_SZ);
+        for (size_t i = 0; i < upper_border_sz; i++) {
             if (((char*)upper_border_last)[-i] != BORD_CHAR) {
                 // It's possible to specify the Upper Border error, but this would fail CS61 tests
                 std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
