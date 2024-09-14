@@ -13,8 +13,11 @@
 #include <set>
 
 
-// Setting for size of fence-post border (buffer, except named border for distinct-name purposes) on either side of an m61_malloc
-static const size_t BORD_SZ = alignof(max_align_t);
+// Setting for # of blocks of alignof(max_align_t) of fence-post border regions on either side of an m61_malloc
+static const size_t BORD_BLOCKS = 1;
+
+// Specs for the border regions (not overflow protected, but BORD_BLOCKS should be kept low anyways)
+static const size_t BORD_SZ = BORD_BLOCKS * alignof(max_align_t);
 static const char BORD_CHAR = 'b';
 
 
@@ -138,7 +141,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     // Set memory in border regions to BORD_CHAR
     memset(pre_border_ptr, BORD_CHAR, BORD_SZ);
-    memset((void*)((uintptr_t)pre_border_ptr + allotment - BORD_SZ), BORD_CHAR, BORD_SZ);
+    memset((void*)((uintptr_t)pre_border_ptr + allotment - (extra + BORD_SZ)), BORD_CHAR, extra + BORD_SZ);
 
 
     // Return ptr adjusted for border size
@@ -193,7 +196,8 @@ void m61_free(void* ptr, const char* file, int line) {
     // Error Detection (Cont.)
     // Fence-Post Write (Border Write)
     if (BORD_SZ != 0) {
-        if (*(char*)pre_border_ptr != BORD_CHAR || *(char*)((uintptr_t)pre_border_ptr + allotment - BORD_SZ) != BORD_CHAR) {
+        // TODO: Only checks 1st byte of border regions! Make for loop to iterate through the whole border regions
+        if (*(char*)pre_border_ptr != BORD_CHAR || *(char*)((uintptr_t)pre_border_ptr + allotment - (extra + BORD_SZ)) != BORD_CHAR) {
             std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
             abort();
         }
