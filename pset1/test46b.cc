@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstring>
 // Check detection of boundary write errors at lower fence-post of allocation.
+// Extension of test46: detects writes to array[-1], rather than array[end + 1]
 
 int main() {
     int* ptr = (int*) m61_malloc(sizeof(int) * 10);

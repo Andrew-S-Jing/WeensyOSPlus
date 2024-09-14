@@ -4,6 +4,9 @@
 #include <cstring>
 #include <random>
 // Check detection of boundary write errors at non-adjacent bytes at upper fence-post of allocation.
+// Extension of test46: detects writes a bit further away than immediately adjacent fence-post writes (at upper border)
+//      Randomly tests one byte only to avoid adding as many tests as bytes to test
+
 
 int main() {
     int* ptr = (int*) m61_malloc(sizeof(int) * 10);
