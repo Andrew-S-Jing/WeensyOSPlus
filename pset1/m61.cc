@@ -13,11 +13,11 @@
 #include <set>
 
 
-// Setting for # of blocks of alignof(max_align_t) of fence-post border regions on either side of an m61_malloc
+// Setting for # of blocks of alignof(std::max_align_t) of fence-post border regions on either side of an m61_malloc
 static const size_t BORD_BLOCKS = 1;
 
 // Specs for the border regions (not overflow protected, but BORD_BLOCKS should be kept low anyways)
-static const size_t BORD_SZ = BORD_BLOCKS * alignof(max_align_t);
+static const size_t BORD_SZ = BORD_BLOCKS * alignof(std::max_align_t);
 static const char BORD_CHAR = 'b';
 
 
