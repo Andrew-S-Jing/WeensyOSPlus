@@ -14,6 +14,7 @@
 
 
 // Setting for # of blocks of alignof(std::max_align_t) of fence-post border regions on either side of an m61_malloc
+// See Citation "Border" for idea to include buffer-borders around each m61_malloc
 static const size_t BORD_BLOCKS = 1;
 
 // Specs for the border regions (not overflow protected, but BORD_BLOCKS should be kept low anyways)
@@ -100,7 +101,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     // Check for space in tail of buffer or inactives list (find_free_space())
     void* pre_border_ptr = nullptr;
     // If space at an inactive chunk of memory, claim `allotment` bytes
-    // Consulted google on the step-search through the values of inactives (See Citation 1)
+    // See Citation "Valfind" for method to value-search in a std::map
     for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
         if (allotment <= iter->second) {
             pre_border_ptr = (void*)iter->first;
