@@ -51,7 +51,10 @@ m61_memory_buffer::~m61_memory_buffer() {
 
 
 
-// Static global to track mem stats and overhead
+// Constant of system alignment
+static const size_t quantum = alignof(std::max_align_t);
+
+// Global to track mem stats and overhead
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
 
 
@@ -69,6 +72,34 @@ static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffe
 static std::set<void*> frees;
 
 
+/// Helpers to safely translate from size to allotment, and allotment to size
+/// Allotment is the size of an m61_malloc, but also accounting for the fence-post borders and alignment adjustments
+/// sz_to_allot(sz) returns an adjusted allotment, will return 0 if overflow is detected
+
+size_t sz_to_allot(size_t sz) {
+    // Prepare for allotment adjustments
+    size_t allotment = sz;
+    size_t misalign = sz % quantum;
+    size_t extra = 0;
+    if (misalign != 0) {
+        extra = quantum - misalign;
+    }
+
+    // Detect overflow
+    if (allotment > SIZE_MAX - (extra + 2 * BORD_SZ)) {
+        return 0;
+    }
+
+    // Align allotment size to alignof(std::max_align_t)
+    allotment += extra;    
+    // Add two border zones of size BORD_SZ to allotment size
+    allotment += 2 * BORD_SZ;
+
+    // Return adjusted value
+    return allotment;
+}
+
+
 /// m61_malloc(sz, file, line)
 ///    Returns a pointer to `sz` bytes of freshly-allocated dynamic memory.
 ///    The memory is not initialized. If `sz == 0`, then m61_malloc may
@@ -84,33 +115,19 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         return nullptr;
     }
 
-    // Enforce alignof(std::max_align_t) as the quantum of malloc sizes
-    const size_t quantum = alignof(std::max_align_t);
-    size_t allotment = sz;
-    size_t misalign = sz % quantum;
-    size_t extra = 0;
-    if (misalign != 0) {
-        extra = quantum - misalign;
-    }
 
-    // Handle cases of overflow (handled before finding allocation space for efficiency)
-    if (allotment > SIZE_MAX - (extra + 2 * BORD_SZ)) {
+    // Adjust sz to allotment, ensure no overflow (handled before finding allocation space for efficiency)
+    size_t allotment = sz_to_allot(sz);
+    if (allotment == 0) {
         // Update stats with failed allocation
         stats.nfail++;
         stats.fail_size += sz;
         return nullptr;
     }
-
-    // Align allotment size to alignof(std::max_align_t)
-    allotment += extra;    
-    // Add two border zones of size BORD_SZ to allotment size
-    allotment += 2 * BORD_SZ;
-
     
-    // Check for space in tail of buffer or inactives list (find_free_space())
-    void* ptr = nullptr;
-    // If space at an inactive chunk of memory, claim `allotment` bytes
+    // Check for space in inactives list, if space at an inactive chunk of memory, claim `allotment` bytes
     // See Citation "Valfind" for method to value-search in a std::map
+    void* ptr = nullptr;
     for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
         if (allotment <= iter->second) {
             ptr = (void*)iter->first;
@@ -153,8 +170,10 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     }
 
     // Set memory in border regions to BORD_CHAR
-    memset((void*)lower_border_first, BORD_CHAR, BORD_SZ);
-    memset((void*)(upper_border_last + 1 - (extra + BORD_SZ)), BORD_CHAR, extra + BORD_SZ);
+    size_t lower_border_sz = BORD_SZ;
+    size_t upper_border_sz = allotment - (sz + BORD_SZ);
+    memset((void*)lower_border_first, BORD_CHAR, lower_border_sz);
+    memset((void*)(upper_border_last + 1 - upper_border_sz), BORD_CHAR, upper_border_sz);
 
 
     // Return ptr
