@@ -53,9 +53,18 @@ m61_memory_buffer::~m61_memory_buffer() {
 
 // Static global to track mem stats and overhead
 static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
-// Elt in actives is {pre_border_ptr, {allotment, extra}}
-static std::map<uintptr_t, std::pair<size_t, size_t>> actives;
-// Elt in inactives is {pre_border_ptr, allotment}
+
+
+// meta is the structure of the metatdata carried by actives
+struct meta {
+    size_t size;
+    size_t allotment;
+    uintptr_t lower_border_first;
+    uintptr_t upper_border_last;
+};
+// Elt in actives is {ptr, metadata}
+static std::map<uintptr_t, meta> actives;
+// Elt in inactives is {lower_border_first, allotment}
 static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffer, default_buffer.size}};
 static std::set<void*> frees;
 
@@ -99,14 +108,14 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     
     // Check for space in tail of buffer or inactives list (find_free_space())
-    void* pre_border_ptr = nullptr;
+    void* lower_border_first = nullptr;
     // If space at an inactive chunk of memory, claim `allotment` bytes
     // See Citation "Valfind" for method to value-search in a std::map
     for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
         if (allotment <= iter->second) {
-            pre_border_ptr = (void*)iter->first;
+            lower_border_first = (void*)iter->first;
             if (allotment != iter->second) {
-                inactives.insert({((uintptr_t)pre_border_ptr + allotment), iter->second - allotment});
+                inactives.insert({((uintptr_t)lower_border_first + allotment), iter->second - allotment});
             }
             inactives.erase(iter);
             break;
@@ -114,7 +123,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     }
 
     // Handle cases of no space found in inactives
-    if (pre_border_ptr == nullptr) {
+    if (lower_border_first == nullptr) {
         // Update stats with failed allocation
         stats.nfail++;
         stats.fail_size += sz;
@@ -122,31 +131,32 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     }
 
 
+    // Adjust ptr accounting for BORD_SZ
+    void* ptr = (void*)((uintptr_t)lower_border_first + BORD_SZ);
     // Add overhead to actives map
-    actives.insert({(uintptr_t)pre_border_ptr, {allotment, extra}});
+    actives.insert({(uintptr_t)ptr, {sz, allotment, (uintptr_t)lower_border_first, (uintptr_t)lower_border_first + allotment - 1}});
 
     // Update set of frees
-    frees.erase(pre_border_ptr);
+    frees.erase(lower_border_first);
     
     // After successful allocation, update stats
     stats.nactive++;
     stats.active_size += sz;
     stats.ntotal++;
     stats.total_size += sz;
-    if ((uintptr_t)pre_border_ptr < stats.heap_min) {
-        stats.heap_min = (uintptr_t)pre_border_ptr;
+    if ((uintptr_t)lower_border_first < stats.heap_min) {
+        stats.heap_min = (uintptr_t)lower_border_first;
     }
-    if ((uintptr_t)pre_border_ptr + allotment - 1 > stats.heap_max) {
-        stats.heap_max = (uintptr_t)pre_border_ptr + allotment - 1;
+    if ((uintptr_t)lower_border_first + allotment - 1 > stats.heap_max) {
+        stats.heap_max = (uintptr_t)lower_border_first + allotment - 1;
     }
 
     // Set memory in border regions to BORD_CHAR
-    memset(pre_border_ptr, BORD_CHAR, BORD_SZ);
-    memset((void*)((uintptr_t)pre_border_ptr + allotment - (extra + BORD_SZ)), BORD_CHAR, extra + BORD_SZ);
+    memset(lower_border_first, BORD_CHAR, BORD_SZ);
+    memset((void*)((uintptr_t)lower_border_first + allotment - (extra + BORD_SZ)), BORD_CHAR, extra + BORD_SZ);
 
 
     // Return ptr adjusted for border size
-    void* ptr = (void*)((uintptr_t)pre_border_ptr + BORD_SZ);
     return ptr;
 }
 
@@ -164,21 +174,21 @@ void m61_free(void* ptr, const char* file, int line) {
     }
 
 
-    // The pointer stored in actives is BORD_SZ below the called ptr
-    void* pre_border_ptr = (void*)((uintptr_t)ptr - BORD_SZ);
+    // Calculate lower_border_first pointer
+    void* lower_border_first = (void*)((uintptr_t)ptr - BORD_SZ);
 
-    // Find pre_border_ptr in actives
-    auto elt_to_free = actives.find((uintptr_t)pre_border_ptr);
+    // Find lower_border_first in actives
+    auto elt_to_free = actives.find((uintptr_t)ptr);
 
 
     // Error Detection
     // Double Free
-    if (frees.find(pre_border_ptr) != frees.end()) {
+    if (frees.find(lower_border_first) != frees.end()) {
         std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", double free\n";
         abort();
     }
     // Non-Heap Free
-    if (pre_border_ptr < default_buffer.buffer || pre_border_ptr >= default_buffer.buffer + default_buffer.size) {
+    if (lower_border_first < default_buffer.buffer || lower_border_first >= default_buffer.buffer + default_buffer.size) {
         std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not in heap\n";
         abort();
     }
@@ -190,15 +200,15 @@ void m61_free(void* ptr, const char* file, int line) {
 
 
     // Pull information into locals
-    size_t allotment = elt_to_free->second.first;
-    size_t extra = elt_to_free->second.second;
+    size_t allotment = elt_to_free->second.allotment;
+    size_t extra = elt_to_free->second.allotment - (elt_to_free->second.size + 2 * BORD_SZ);
 
 
     // Error Detection (Cont.)
     // Fence-Post Write (Border Write)
     if (BORD_SZ != 0) {
         // Check fence-post writes on lower border
-        char* lower_border_begin = (char*)pre_border_ptr;
+        char* lower_border_begin = (char*)lower_border_first;
         for (size_t i = 0; i < BORD_SZ; i++) {
             if (lower_border_begin[i] != BORD_CHAR) {
                 // It's possible to specify the Lower Border error, but this would fail CS61 tests
@@ -207,7 +217,7 @@ void m61_free(void* ptr, const char* file, int line) {
             }
         }
         // Check fence-post writes on upper border
-        char* upper_border_end = (char*)((uintptr_t)pre_border_ptr + allotment - 1);
+        char* upper_border_end = (char*)((uintptr_t)lower_border_first + allotment - 1);
         for (size_t i = 0; i < BORD_SZ + extra; i++) {
             if (upper_border_end[-i] != BORD_CHAR) {
                 // It's possible to specify the Upper Border error, but this would fail CS61 tests
@@ -219,11 +229,11 @@ void m61_free(void* ptr, const char* file, int line) {
     
 
     // Free from actives
-    actives.erase((uintptr_t)pre_border_ptr);
+    actives.erase((uintptr_t)ptr);
     // Free into inactives
-    inactives.insert({(uintptr_t)pre_border_ptr, allotment});
+    inactives.insert({(uintptr_t)lower_border_first, allotment});
     // Add to set of frees
-    frees.insert(pre_border_ptr);
+    frees.insert(lower_border_first);
 
     // Update memory statistics
     stats.nactive--;
@@ -231,7 +241,7 @@ void m61_free(void* ptr, const char* file, int line) {
 
 
     // Coalesce up
-    auto iter = inactives.find((uintptr_t)pre_border_ptr);
+    auto iter = inactives.find((uintptr_t)lower_border_first);
     auto next = iter;
     next++;
     if (iter != inactives.end() && next != inactives.end() && iter->first + iter->second == next->first) {
@@ -296,5 +306,12 @@ void m61_print_statistics() {
 ///    memory.
 
 void m61_print_leak_report() {
-    // Your code here.
+    // Check actives for leaks (actives is not empty)
+    if (!actives.empty()) {
+        for (auto iter = actives.begin(); iter != actives.end(); iter++) {
+            void* ptr = (void*)iter->first;
+            size_t sz = iter->second.size;
+            std::cout << "LEAK CHECK: " << "file" << ':' << "line" << ": allocated object " << ptr << " with size " << sz << '\n';
+        }
+    }
 }
