@@ -14,7 +14,7 @@
 
 
 // Setting for size of fence-post border (buffer, except named border for distinct-name purposes) on either side of an m61_malloc
-static const size_t BORD_SZ = 0;
+static const size_t BORD_SZ = alignof(max_align_t);
 static const char BORD_CHAR = 'b';
 
 
@@ -170,17 +170,17 @@ void m61_free(void* ptr, const char* file, int line) {
     // Error Detection
     // Double Free
     if (frees.find(pre_border_ptr) != frees.end()) {
-        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << pre_border_ptr << ", double free\n";
+        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", double free\n";
         abort();
     }
     // Non-Heap Free
     if (pre_border_ptr < default_buffer.buffer || pre_border_ptr >= default_buffer.buffer + default_buffer.size) {
-        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << pre_border_ptr << ", not in heap\n";
+        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not in heap\n";
         abort();
     }
     // Wild Free
     if (elt_to_free == actives.end()) {
-        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << pre_border_ptr << ", not allocated\n";
+        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not allocated\n";
         abort();
     }
 
@@ -194,7 +194,7 @@ void m61_free(void* ptr, const char* file, int line) {
     // Fence-Post Write (Border Write)
     if (BORD_SZ != 0) {
         if (*(char*)pre_border_ptr != BORD_CHAR || *(char*)((uintptr_t)pre_border_ptr + allotment - BORD_SZ) != BORD_CHAR) {
-            std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << pre_border_ptr << '\n';
+            std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
             abort();
         }
     }
@@ -209,7 +209,7 @@ void m61_free(void* ptr, const char* file, int line) {
 
     // Update memory statistics
     stats.nactive--;
-    stats.active_size -= allotment - extra;
+    stats.active_size -= allotment - (extra + 2 * BORD_SZ);
 
 
     // Coalesce up
