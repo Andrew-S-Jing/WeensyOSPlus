@@ -12,5 +12,5 @@ Grading notes (if any)
 
 Extra credit attempted (if any)
 -------------------------------
-Extra tests: test46b.cc, test46c.cc, test46d.cc
+Extra tests: test27b.cc, test46b.cc, test46c.cc, test46d.cc
     See comments in test files for further description
