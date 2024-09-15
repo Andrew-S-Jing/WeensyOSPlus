@@ -7,7 +7,6 @@
 #include <cassert>
 #include <sys/mman.h>
 // Additional includes
-#include <cmath>
 #include <iostream>
 #include <map>
 #include <set>
