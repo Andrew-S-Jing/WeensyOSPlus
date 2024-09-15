@@ -1,5 +1,3 @@
-// TODO: Fix runon lines of code
-
 #include "m61.hh"
 #include <cstdlib>
 #include <cstddef>
@@ -15,11 +13,13 @@
 #include <set>
 
 
-// Setting for # of blocks of alignof(std::max_align_t) of fence-post border regions on either side of an m61_malloc
-// See Citation "Border" for idea to include buffer-borders around each m61_malloc
+// Setting for # of blocks of alignof(std::max_align_t) of fence-post border
+//   regions on either side of an m61_malloc
+// See Citation "Border" for idea of buffer-borders around each m61_malloc
 static const size_t BORD_BLOCKS = 1;
 
-// Specs for the border regions (not overflow protected, but BORD_BLOCKS should be kept low anyways)
+// Specs for the border regions
+// Not overflow protected, but BORD_BLOCKS should be kept low anyways
 static const size_t BORD_SZ = BORD_BLOCKS * alignof(std::max_align_t);
 static const char BORD_CHAR = 'b';
 
@@ -58,11 +58,26 @@ static const size_t quantum = alignof(std::max_align_t);
 
 // Metadata objects
 // Memory statistics tracker
-static m61_statistics stats = {0, 0, 0, 0, 0, 0, (uintptr_t)default_buffer.buffer, (uintptr_t)default_buffer.buffer};
+static m61_statistics stats = {
+    0,                                  // # active allocations
+    0,                                  // # bytes in active allocations
+    0,                                  // # total allocations
+    0,                                  // # bytes in total allocations
+    0,                                  // # failed allocation attempts
+    0,                                  // # bytes in failed alloc attempts
+    (uintptr_t)default_buffer.buffer,   // smallest allocated addr
+    (uintptr_t)default_buffer.buffer    // largest allocated addr
+};
 // Elt in actives is {ptr, metadata} (See struct meta in m61.hh)
 static std::map<uintptr_t, meta> actives;
-// Elt in inactives is {ptr, allotment}, allotment is defined below by sz_to_allot()
-static std::map<uintptr_t, size_t> inactives = {{(uintptr_t)default_buffer.buffer + BORD_SZ, default_buffer.size}};
+// Elt in inactives is {ptr, allotment}
+//     Allotment defined below by sz_to_allot()
+static std::map<uintptr_t, size_t> inactives = {
+    {
+        (uintptr_t)default_buffer.buffer + BORD_SZ,     // lowest allocable addr
+        default_buffer.size                             // total buffer allot
+    }
+};
 // Tracks set of previous freed pointers
 static std::set<void*> frees;
 
@@ -76,14 +91,16 @@ static std::set<void*> frees;
 
 void* m61_malloc(size_t sz, const char* file, int line) {
 
-    // m61_malloc(0) returns the nullptr. Counts as a successful, inactive allocation.
+    // m61_malloc(0) returns the nullptr
+    //     Counts as a successful, inactive allocation
     if (sz == 0) {
         stats.ntotal++;
         return nullptr;
     }
 
 
-    // Adjust sz to allotment, ensure no overflow (handled before finding allocation space for efficiency)
+    // Adjust sz to allotment, ensure no overflow
+    //    Handled before finding allocation space for efficiency
     size_t allotment = sz_to_allot(sz);
     if (allotment == 0) {
         // Update stats with failed allocation
@@ -92,14 +109,18 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         return nullptr;
     }
     
-    // Check for space in inactives list, if space at an inactive chunk of memory, claim `allotment` bytes
+    // Check for space in inactives list, if space at an inactive chunk of
+    //   memory, claim `allotment` bytes
     // See Citation "Valfind" for method to value-search in a std::map
     void* ptr = nullptr;
     for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
         if (allotment <= iter->second) {
             ptr = (void*)iter->first;
+            // Reinsert leftover memory from inactive chunk into inactives
             if (allotment != iter->second) {
-                inactives.insert({((uintptr_t)ptr + allotment), iter->second - allotment});
+                uintptr_t remainder_ptr = (uintptr_t)ptr + allotment;
+                size_t remainder_allotment = iter->second - allotment;
+                inactives.insert({remainder_ptr, remainder_allotment});
             }
             inactives.erase(iter);
             break;
@@ -119,14 +140,13 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     uintptr_t lower_border_first = (uintptr_t)ptr - BORD_SZ;
     uintptr_t upper_border_last = lower_border_first + allotment - 1;
     // Add overhead to actives map
-    meta metadata =
-        {
-            sz,                     // metadata.size
-            lower_border_first,     // metadata.lower_border_first
-            upper_border_last,      // metadata.upper_border_last
-            file,                   // metadata.file
-            line                    // metadata.line
-        };
+    meta metadata = {
+        sz,                     // metadata.size
+        lower_border_first,     // metadata.lower_border_first
+        upper_border_last,      // metadata.upper_border_last
+        file,                   // metadata.file
+        line                    // metadata.line
+    };
     actives.insert({(uintptr_t)ptr, metadata});
 
     // Update set of frees
@@ -147,8 +167,9 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     // Set memory in border regions to BORD_CHAR
     size_t lower_border_sz = BORD_SZ;
     size_t upper_border_sz = allotment - (sz + BORD_SZ);
+    uintptr_t upper_border_first = upper_border_last + 1 - upper_border_sz;
     memset((void*)lower_border_first, BORD_CHAR, lower_border_sz);
-    memset((void*)(upper_border_last + 1 - upper_border_sz), BORD_CHAR, upper_border_sz);
+    memset((void*)upper_border_first, BORD_CHAR, upper_border_sz);
 
 
     // Return ptr
@@ -177,24 +198,36 @@ void m61_free(void* ptr, const char* file, int line) {
     // Error Detection
     // Double Free
     if (frees.find(ptr) != frees.end()) {
-        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", double free\n";
+        std::cerr << "MEMORY BUG: " << file << ':' << line
+            << ": invalid free of pointer " << ptr << ", double free\n";
         abort();
     }
     // Non-Heap Free
-    if ((void*)((uintptr_t)ptr - BORD_SZ) < default_buffer.buffer || ptr >= default_buffer.buffer + default_buffer.size) {
-        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not in heap\n";
-        abort();
+    if ((void*)((uintptr_t)ptr - BORD_SZ) < default_buffer.buffer
+        || ptr >= default_buffer.buffer + default_buffer.size) {
+            std::cerr << "MEMORY BUG: " << file << ':' << line
+                << ": invalid free of pointer " << ptr << ", not in heap\n";
+            abort();
     }
     // Wild Free
     if (elt_to_free == actives.end()) {
-        std::cerr << "MEMORY BUG: " << file << ':' << line << ": invalid free of pointer " << ptr << ", not allocated\n";
+        std::cerr << "MEMORY BUG: " << file << ':' << line
+            << ": invalid free of pointer " << ptr << ", not allocated\n";
         auto prev_active = actives.upper_bound((uintptr_t)ptr);
-        prev_active--;
         if (prev_active != actives.begin()) {
-            uintptr_t prev_ptr = prev_active->first;
-            meta prev_metadata = prev_active->second;
-            if (prev_ptr <= (uintptr_t)ptr && (uintptr_t)ptr < prev_ptr + prev_metadata.size) {
-                std::cerr << "  " << prev_metadata.file << ':' << prev_metadata.line << ": " << ptr << " is " << (uintptr_t)ptr - prev_ptr << " bytes inside a " << prev_metadata.size << " byte region allocated here" << '\n';
+            prev_active--;
+            if (prev_active != actives.begin()) {
+                uintptr_t prev_ptr = prev_active->first;
+                meta prev_metadata = prev_active->second;
+                // Wild Free inside allocated chunk
+                if (prev_ptr <= (uintptr_t)ptr
+                    && (uintptr_t)ptr < prev_ptr + prev_metadata.size) {
+                        std::cerr << "  " << prev_metadata.file << ':'
+                            << prev_metadata.line << ": " << ptr << " is "
+                            << (uintptr_t)ptr - prev_ptr << " bytes inside a "
+                            << prev_metadata.size
+                            << " byte region allocated here" << '\n';
+                }
             }
         }
         abort();
@@ -215,8 +248,11 @@ void m61_free(void* ptr, const char* file, int line) {
         size_t lower_border_sz = BORD_SZ;
         for (size_t i = 0; i < lower_border_sz; i++) {
             if (((char*)lower_border_first)[i] != BORD_CHAR) {
-                // It's possible to specify the Lower Border error, but this would fail CS61 tests
-                std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
+                // It's possible to specify the Lower Border error, but this
+                //   would fail CS61 tests
+                std::cerr << "MEMORY BUG: " << file << ':' << line
+                    << ": detected wild write during free of pointer " << ptr
+                    << '\n';
                 abort();
             }
         }
@@ -224,8 +260,11 @@ void m61_free(void* ptr, const char* file, int line) {
         size_t upper_border_sz = allotment - (sz + BORD_SZ);
         for (size_t i = 0; i < upper_border_sz; i++) {
             if (((char*)upper_border_last)[-i] != BORD_CHAR) {
-                // It's possible to specify the Upper Border error, but this would fail CS61 tests
-                std::cerr << "MEMORY BUG: " << file << ':' << line << ": detected wild write during free of pointer " << ptr << '\n';
+                // It's possible to specify the Upper Border error, but this
+                //   would fail CS61 tests
+                std::cerr << "MEMORY BUG: " << file << ':' << line
+                    << ": detected wild write during free of pointer " << ptr
+                    << '\n';
                 abort();
             }
         }
@@ -247,17 +286,24 @@ void m61_free(void* ptr, const char* file, int line) {
     // Coalesce up
     auto iter = inactives.find((uintptr_t)ptr);
     auto next = iter;
-    next++;
-    if (iter != inactives.end() && next != inactives.end() && iter->first + iter->second == next->first) {
-        iter->second += next->second;
-        inactives.erase(next);
+    if (next != inactives.end()) {
+        next++;
+        if (iter != inactives.end() && next != inactives.end()
+            && iter->first + iter->second == next->first) {
+                iter->second += next->second;
+                inactives.erase(next);
+        }
     }
     // Coalesce down
     auto prev = iter;
-    prev--;
-    if (iter != inactives.begin() && prev != inactives.begin() && prev->first + prev->second == iter->first) {
-        prev->second += iter->second;
-        inactives.erase(iter);
+    if (prev != inactives.begin()) {
+        prev--;
+        if (iter != inactives.begin()
+            && prev != inactives.begin()
+            && prev->first + prev->second == iter->first) {
+                prev->second += iter->second;
+                inactives.erase(iter);
+        }
     }
 }
 
@@ -288,8 +334,9 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
 
 /// sz_to_allot(sz)
 ///     Helper to safely translate from size to allotment
-///     Allotment is the size of an m61_malloc, but also accounting for the fence-post borders and alignment adjustments
-///     sz_to_allot(sz) returns an adjusted allotment, will return 0 if overflow is detected
+///     Allotment is the size of an m61_malloc, but also accounting for the
+///       fence-post borders and alignment adjustments
+///     Returns an adjusted allotment, will return 0 if overflow is detected
 
 size_t sz_to_allot(size_t sz) {
     
@@ -330,9 +377,13 @@ m61_statistics m61_get_statistics() {
 void m61_print_statistics() {
     m61_statistics local_stats = m61_get_statistics();
     printf("alloc count: active %10llu   total %10llu   fail %10llu\n",
-           local_stats.nactive, local_stats.ntotal, local_stats.nfail);
+           local_stats.nactive,
+           local_stats.ntotal,
+           local_stats.nfail);
     printf("alloc size:  active %10llu   total %10llu   fail %10llu\n",
-           local_stats.active_size, local_stats.total_size, local_stats.fail_size);
+           local_stats.active_size,
+           local_stats.total_size,
+           local_stats.fail_size);
 }
 
 
@@ -346,7 +397,9 @@ void m61_print_leak_report() {
         for (auto iter = actives.begin(); iter != actives.end(); iter++) {
             void* ptr = (void*)iter->first;
             meta metadata = iter->second;
-            std::cout << "LEAK CHECK: " << metadata.file << ':' << metadata.line << ": allocated object " << ptr << " with size " << metadata.size << '\n';
+            std::cout << "LEAK CHECK: " << metadata.file << ':' << metadata.line
+                << ": allocated object " << ptr
+                << " with size " << metadata.size << '\n';
         }
     }
 }
