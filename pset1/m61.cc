@@ -20,7 +20,7 @@ static const size_t BORD_BLOCKS = 1;
 // Specs for the border regions
 // Not overflow protected, but BORD_BLOCKS should be kept low anyways
 static const size_t BORD_SZ = BORD_BLOCKS * alignof(std::max_align_t);
-static const char BORD_CHAR = 'b';
+static const char BORD_CHAR = 61;
 
 
 struct m61_memory_buffer {
@@ -102,29 +102,14 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     //    Handled before finding allocation space for efficiency
     size_t allotment = sz_to_allot(sz);
     if (allotment == 0) {
-        // Update stats with failed allocation
         stats.nfail++;
         stats.fail_size += sz;
         return nullptr;
     }
+
     
-    // Check for space in inactives list, if space at an inactive chunk of
-    //   memory, claim `allotment` bytes
-    // See Citation "Valfind" for method to value-search in a std::map
-    void* ptr = nullptr;
-    for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
-        if (allotment <= iter->second) {
-            ptr = (void*)iter->first;
-            // Reinsert leftover memory from inactive chunk into inactives
-            if (allotment != iter->second) {
-                uintptr_t remainder_ptr = (uintptr_t)ptr + allotment;
-                size_t remainder_allotment = iter->second - allotment;
-                inactives.insert({remainder_ptr, remainder_allotment});
-            }
-            inactives.erase(iter);
-            break;
-        }
-    }
+    // Check for enough free space in inactives
+    void* ptr = m61_find_free_space(allotment);
 
     // Handle cases of no space found in inactives
     if (ptr == nullptr) {
@@ -133,6 +118,15 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         stats.fail_size += sz;
         return nullptr;
     }
+
+    // Reinsert leftover memory from inactive chunk into inactives
+    auto iter = inactives.find((uintptr_t)ptr);
+    if (allotment != iter->second) {
+        uintptr_t remainder_ptr = (uintptr_t)ptr + allotment;
+        size_t remainder_allotment = iter->second - allotment;
+        inactives.insert({remainder_ptr, remainder_allotment});
+    }
+    inactives.erase(iter);
 
 
     // Define border boundaries with BORD_SZ
@@ -326,6 +320,24 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
     void* ptr = m61_malloc(count * sz, file, line);
     if (ptr) {
         memset(ptr, 0, count * sz);
+    }
+    return ptr;
+}
+
+
+/// m61_find_free_space(allotment)
+///     Return a pointer to at least `allotment` bytes of inactive memory.
+///     Returns `nullptr` if no such space is found.
+///     `allotment == 0` is not allowed.
+///     See Citation "Valfind" for method to value-search in a std::map
+
+void* m61_find_free_space(size_t allotment) {
+    void* ptr = nullptr;
+    for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
+        if (allotment <= iter->second) {
+            ptr = (void*)iter->first;
+            break;
+        }
     }
     return ptr;
 }

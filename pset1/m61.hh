@@ -20,6 +20,12 @@ struct meta {
     int line;
 };
 
+/// m61_find_free_space(allotment)
+///     Return a pointer to at least `allotment` bytes of inactive memory.
+///     Returns `nullptr` if no such space is found.
+///     See Citation "Valfind" for method to value-search in a std::map
+void* m61_find_free_space(size_t allotment);
+
 /// sz_to_allot(sz)
 ///     Helper to safely translate from size to allotment
 ///     Allotment is the size of an m61_malloc, but also accounting for the fence-post borders and alignment adjustments
