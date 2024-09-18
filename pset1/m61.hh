@@ -33,6 +33,15 @@ void m61_activate_mem(void* ptr, size_t sz, size_t allotment,
 ///     See Citation "Valfind" for method to value-search in a std::map
 void* m61_find_free_space(size_t allotment);
 
+/// m61_free_bug_detect(ptr, file, line)
+///     If any memory bugs during the process of `m61_free()`, calls `abort()`.
+void m61_free_bug_detect(void* ptr, const char* file, int line);
+
+/// m61_coalesce(ptr)
+///     Coalesces the `inactives` element with key `(uintptr_t)ptr` with its
+///       immediate upwards neighbor and immediate downwards neighbor
+void m61_coalesce(void* ptr);
+
 /// sz_to_allot(sz)
 ///     Helper to safely translate from size to allotment
 ///     Allotment is the size of an m61_malloc, but also accounting for the fence-post borders and alignment adjustments

@@ -166,87 +166,14 @@ void m61_free(void* ptr, const char* file, int line) {
     if (ptr == nullptr) {
         return;
     }
+    
+    // Call `abort()` if any bugs are detected
+    m61_free_bug_detect(ptr, file, line);
 
-
-    // Find `ptr` in actives
+    // Find `ptr` in actives, pull data into locals
     auto elt_to_free = actives.find((uintptr_t)ptr);
-
-
-    // Error Detection
-    // Double Free
-    if (frees.find(ptr) != frees.end()) {
-        std::cerr << "MEMORY BUG: " << file << ':' << line
-            << ": invalid free of pointer " << ptr << ", double free\n";
-        abort();
-    }
-    // Non-Heap Free
-    if ((void*)((uintptr_t)ptr - BORD_SZ) < default_buffer.buffer
-        || ptr >= default_buffer.buffer + default_buffer.size) {
-            std::cerr << "MEMORY BUG: " << file << ':' << line
-                << ": invalid free of pointer " << ptr << ", not in heap\n";
-            abort();
-    }
-    // Wild Free
-    if (elt_to_free == actives.end()) {
-        std::cerr << "MEMORY BUG: " << file << ':' << line
-            << ": invalid free of pointer " << ptr << ", not allocated\n";
-        auto prev_active = actives.upper_bound((uintptr_t)ptr);
-        if (prev_active != actives.begin()) {
-            prev_active--;
-            if (prev_active != actives.begin()) {
-                uintptr_t prev_ptr = prev_active->first;
-                meta prev_metadata = prev_active->second;
-                // Wild Free inside allocated chunk
-                if (prev_ptr <= (uintptr_t)ptr
-                    && (uintptr_t)ptr < prev_ptr + prev_metadata.size) {
-                        std::cerr << "  " << prev_metadata.file << ':'
-                            << prev_metadata.line << ": " << ptr << " is "
-                            << (uintptr_t)ptr - prev_ptr << " bytes inside a "
-                            << prev_metadata.size
-                            << " byte region allocated here" << '\n';
-                }
-            }
-        }
-        abort();
-    }
-
-
-    // Pull information into locals
-    uintptr_t lower_border_first = elt_to_free->second.lower_border_first;
-    uintptr_t upper_border_last = elt_to_free->second.upper_border_last;
     size_t sz = elt_to_free->second.size;
     size_t allotment = sz_to_allot(sz);
-
-
-    // Error Detection (Cont.)
-    // Fence-Post Write (Border Write)
-    if (BORD_SZ != 0) {
-        // Check fence-post writes on lower border
-        size_t lower_border_sz = BORD_SZ;
-        for (size_t i = 0; i < lower_border_sz; i++) {
-            if (((char*)lower_border_first)[i] != BORD_CHAR) {
-                // It's possible to specify the Lower Border error, but this
-                //   would fail CS61 tests
-                std::cerr << "MEMORY BUG: " << file << ':' << line
-                    << ": detected wild write during free of pointer " << ptr
-                    << '\n';
-                abort();
-            }
-        }
-        // Check fence-post writes on upper border
-        size_t upper_border_sz = allotment - (sz + BORD_SZ);
-        for (size_t i = 0; i < upper_border_sz; i++) {
-            if (((char*)upper_border_last)[-i] != BORD_CHAR) {
-                // It's possible to specify the Upper Border error, but this
-                //   would fail CS61 tests
-                std::cerr << "MEMORY BUG: " << file << ':' << line
-                    << ": detected wild write during free of pointer " << ptr
-                    << '\n';
-                abort();
-            }
-        }
-    }
-    
 
     // Free from `actives`
     actives.erase((uintptr_t)ptr);
@@ -259,29 +186,8 @@ void m61_free(void* ptr, const char* file, int line) {
     stats.nactive--;
     stats.active_size -= sz;
 
-
-    // Coalesce up
-    auto iter = inactives.find((uintptr_t)ptr);
-    auto next = iter;
-    if (next != inactives.end()) {
-        next++;
-        if (iter != inactives.end() && next != inactives.end()
-            && iter->first + iter->second == next->first) {
-                iter->second += next->second;
-                inactives.erase(next);
-        }
-    }
-    // Coalesce down
-    auto prev = iter;
-    if (prev != inactives.begin()) {
-        prev--;
-        if (iter != inactives.begin()
-            && prev != inactives.begin()
-            && prev->first + prev->second == iter->first) {
-                prev->second += iter->second;
-                inactives.erase(iter);
-        }
-    }
+    // Coalesce inactive chunks
+    m61_coalesce(ptr);
 }
 
 
@@ -355,6 +261,118 @@ void* m61_find_free_space(size_t allotment) {
         }
     }
     return ptr;
+}
+
+
+/// m61_free_bug_detect(ptr, file, line)
+///     If any memory bugs during the process of `m61_free()`, calls `abort()`.
+
+void m61_free_bug_detect(void* ptr, const char* file, int line) {
+
+    // Pull the entry in `actives` for this free attempt
+    auto elt_to_free = actives.find((uintptr_t)ptr);
+
+    // Bug Detection
+    // Double Free
+    if (frees.find(ptr) != frees.end()) {
+        std::cerr << "MEMORY BUG: " << file << ':' << line
+            << ": invalid free of pointer " << ptr << ", double free\n";
+        abort();
+    }
+    // Non-Heap Free
+    if ((void*)((uintptr_t)ptr - BORD_SZ) < default_buffer.buffer
+        || ptr >= default_buffer.buffer + default_buffer.size) {
+            std::cerr << "MEMORY BUG: " << file << ':' << line
+                << ": invalid free of pointer " << ptr << ", not in heap\n";
+            abort();
+    }
+    // Wild Free
+    if (elt_to_free == actives.end()) {
+        std::cerr << "MEMORY BUG: " << file << ':' << line
+            << ": invalid free of pointer " << ptr << ", not allocated\n";
+        auto prev_active = actives.upper_bound((uintptr_t)ptr);
+        if (prev_active != actives.begin()) {
+            prev_active--;
+            if (prev_active != actives.begin()) {
+                uintptr_t prev_ptr = prev_active->first;
+                meta prev_metadata = prev_active->second;
+                // Wild Free inside allocated chunk
+                if (prev_ptr <= (uintptr_t)ptr
+                    && (uintptr_t)ptr < prev_ptr + prev_metadata.size) {
+                        std::cerr << "  " << prev_metadata.file << ':'
+                            << prev_metadata.line << ": " << ptr << " is "
+                            << (uintptr_t)ptr - prev_ptr << " bytes inside a "
+                            << prev_metadata.size
+                            << " byte region allocated here" << '\n';
+                }
+            }
+        }
+        abort();
+    }
+
+    // Pull information into locals
+    uintptr_t lower_border_first = elt_to_free->second.lower_border_first;
+    uintptr_t upper_border_last = elt_to_free->second.upper_border_last;
+    size_t sz = elt_to_free->second.size;
+    size_t allotment = sz_to_allot(sz);
+
+    // Bug Detection (Cont.)
+    // Fence-Post Write (Border Write)
+    if (BORD_SZ != 0) {
+        // Check fence-post writes on lower border
+        size_t lower_border_sz = BORD_SZ;
+        for (size_t i = 0; i < lower_border_sz; i++) {
+            if (((char*)lower_border_first)[i] != BORD_CHAR) {
+                std::cerr << "MEMORY BUG: " << file << ':' << line
+                    << ": detected wild write during free of pointer " << ptr
+                    << '\n'
+                    << "Wild write occured on the allocation's lower border\n";
+                abort();
+            }
+        }
+        // Check fence-post writes on upper border
+        size_t upper_border_sz = allotment - (sz + BORD_SZ);
+        for (size_t i = 0; i < upper_border_sz; i++) {
+            if (((char*)upper_border_last)[-i] != BORD_CHAR) {
+                std::cerr << "MEMORY BUG: " << file << ':' << line
+                    << ": detected wild write during free of pointer " << ptr
+                    << '\n'
+                    << "Wild write occured on the allocation's upper border\n";
+                abort();
+            }
+        }
+    }
+}
+
+
+/// m61_coalesce(ptr)
+///     Coalesces the `inactives` element with key `(uintptr_t)ptr` with its
+///       immediate upwards neighbor and immediate downwards neighbor
+
+void m61_coalesce(void* ptr) {
+    // Coalesce up
+    auto iter = inactives.find((uintptr_t)ptr);
+    auto next = iter;
+    if (next != inactives.end()) {
+        next++;
+        if (iter != inactives.end() && next != inactives.end()
+            && iter->first + iter->second == next->first) {
+                iter->second += next->second;
+                inactives.erase(next);
+        }
+    }
+
+    // Coalesce down
+    auto prev = iter;
+    if (prev != inactives.begin()) {
+        prev--;
+        if (iter != inactives.begin()
+            && prev != inactives.begin()
+            && prev->first + prev->second == iter->first) {
+                prev->second += iter->second;
+                inactives.erase(iter);
+        }
+    }
 }
 
 
