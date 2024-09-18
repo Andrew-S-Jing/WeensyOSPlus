@@ -20,6 +20,13 @@ struct meta {
     int line;
 };
 
+/// m61_activate_mem(ptr, sz, allotment, file, line)
+///     Adds the allocation described by the arguments, as well as the
+///       corresponding metadata to `actives`.
+///     Also establishes the canary borders above and below the allocation
+void m61_activate_mem(void* ptr, size_t sz, size_t allotment,
+                      const char* file, int line);
+
 /// m61_find_free_space(allotment)
 ///     Return a pointer to at least `allotment` bytes of inactive memory.
 ///     Returns `nullptr` if no such space is found.

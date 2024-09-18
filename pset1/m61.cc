@@ -67,10 +67,10 @@ static m61_statistics stats = {
     (uintptr_t)default_buffer.buffer,   // smallest allocated addr
     (uintptr_t)default_buffer.buffer    // largest allocated addr
 };
-// Elt in actives is {ptr, metadata} (See struct meta in m61.hh)
+// Elt in actives is {ptr, metadata} (See struct meta in "m61.hh")
 static std::map<uintptr_t, meta> actives;
 // Elt in inactives is {ptr, allotment}
-//     Allotment defined below by sz_to_allot()
+//     Allotment defined below by `sz_to_allot()`
 static std::map<uintptr_t, size_t> inactives = {
     {
         (uintptr_t)default_buffer.buffer + BORD_SZ,     // lowest allocable addr
@@ -90,16 +90,15 @@ static std::set<void*> frees;
 
 void* m61_malloc(size_t sz, const char* file, int line) {
 
-    // m61_malloc(0) returns the nullptr
+    // `m61_malloc(0)` returns the nullptr
     //     Counts as a successful, inactive allocation
     if (sz == 0) {
         stats.ntotal++;
         return nullptr;
     }
 
-
-    // Adjust sz to allotment, ensure no overflow
-    //    Handled before finding allocation space for efficiency
+    // Adjust `sz` to `allotment`, fail on overflow
+    //     Handled before finding allocation space for efficiency
     size_t allotment = sz_to_allot(sz);
     if (allotment == 0) {
         stats.nfail++;
@@ -111,61 +110,46 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     // Check for enough free space in inactives
     void* ptr = m61_find_free_space(allotment);
 
-    // Handle cases of no space found in inactives
+    // Fail on no space found by `m61_find_free_space()`
     if (ptr == nullptr) {
-        // Update stats with failed allocation
         stats.nfail++;
         stats.fail_size += sz;
         return nullptr;
     }
 
     // Reinsert leftover memory from inactive chunk into inactives
-    auto iter = inactives.find((uintptr_t)ptr);
-    if (allotment != iter->second) {
-        uintptr_t remainder_ptr = (uintptr_t)ptr + allotment;
-        size_t remainder_allotment = iter->second - allotment;
-        inactives.insert({remainder_ptr, remainder_allotment});
+    {
+        auto iter = inactives.find((uintptr_t)ptr);
+        if (allotment != iter->second) {
+            uintptr_t remainder_ptr = (uintptr_t)ptr + allotment;
+            size_t remainder_allotment = iter->second - allotment;
+            inactives.insert({remainder_ptr, remainder_allotment});
+        }
+        inactives.erase(iter);
     }
-    inactives.erase(iter);
+
+    // Add allocation and metadata to `actives`, set border canaries
+    m61_activate_mem(ptr, sz, allotment, file, line);
+    auto active_iter = actives.find((uintptr_t)ptr);
 
 
-    // Define border boundaries with BORD_SZ
-    uintptr_t lower_border_first = (uintptr_t)ptr - BORD_SZ;
-    uintptr_t upper_border_last = lower_border_first + allotment - 1;
-    // Add overhead to actives map
-    meta metadata = {
-        sz,                     // metadata.size
-        lower_border_first,     // metadata.lower_border_first
-        upper_border_last,      // metadata.upper_border_last
-        file,                   // metadata.file
-        line                    // metadata.line
-    };
-    actives.insert({(uintptr_t)ptr, metadata});
-
-    // Update set of frees
+    // Update `frees`
     frees.erase(ptr);
-    
-    // After successful allocation, update stats
+
+    // After successful allocation, update `stats`
     stats.nactive++;
     stats.active_size += sz;
     stats.ntotal++;
     stats.total_size += sz;
-    if (lower_border_first < stats.heap_min) {
-        stats.heap_min = lower_border_first;
+    if (active_iter->second.lower_border_first < stats.heap_min) {
+        stats.heap_min = active_iter->second.lower_border_first;
     }
-    if (upper_border_last > stats.heap_max) {
-        stats.heap_max = upper_border_last;
+    if (active_iter->second.upper_border_last > stats.heap_max) {
+        stats.heap_max = active_iter->second.upper_border_last;
     }
 
-    // Set memory in border regions to BORD_CHAR
-    size_t lower_border_sz = BORD_SZ;
-    size_t upper_border_sz = allotment - (sz + BORD_SZ);
-    uintptr_t upper_border_first = upper_border_last + 1 - upper_border_sz;
-    memset((void*)lower_border_first, BORD_CHAR, lower_border_sz);
-    memset((void*)upper_border_first, BORD_CHAR, upper_border_sz);
 
-
-    // Return ptr
+    // Return `ptr`
     return ptr;
 }
 
@@ -178,13 +162,13 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
 void m61_free(void* ptr, const char* file, int line) {
 
-    // Do nothing upon m61_free(nullptr)
+    // Do nothing upon `m61_free(nullptr)`
     if (ptr == nullptr) {
         return;
     }
 
 
-    // Find lower_border_first in actives
+    // Find `ptr` in actives
     auto elt_to_free = actives.find((uintptr_t)ptr);
 
 
@@ -264,14 +248,14 @@ void m61_free(void* ptr, const char* file, int line) {
     }
     
 
-    // Free from actives
+    // Free from `actives`
     actives.erase((uintptr_t)ptr);
-    // Free into inactives
+    // Free into `inactives`
     inactives.insert({(uintptr_t)ptr, allotment});
-    // Add to set of frees
+    // Add to `frees`
     frees.insert(ptr);
 
-    // Update memory statistics
+    // Update `stats`
     stats.nactive--;
     stats.active_size -= sz;
 
@@ -310,7 +294,7 @@ void m61_free(void* ptr, const char* file, int line) {
 
 void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
 
-    // Detect overflow in count * sz
+    // Detect overflow in `count * sz`
     bool overflow = sz != 0 && count > SIZE_MAX / sz;
     if (overflow) {
         stats.nfail++;
@@ -322,6 +306,37 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
         memset(ptr, 0, count * sz);
     }
     return ptr;
+}
+
+
+/// m61_activate_mem(ptr, sz, allotment, file, line)
+///     Adds the allocation described by the arguments, as well as the
+///       corresponding metadata to `actives`.
+///     Also establishes the canary borders above and below the allocation
+
+void m61_activate_mem(void* ptr, size_t sz, size_t allotment,
+                      const char* file, int line) {
+
+    // Define border boundaries with respect to `BORD_SZ`
+    uintptr_t lower_border_first = (uintptr_t)ptr - BORD_SZ;
+    uintptr_t upper_border_last = lower_border_first + allotment - 1;
+
+    // Add allocated pointer and its metadata to actives
+    meta metadata = {
+        sz,                     // metadata.size
+        lower_border_first,     // metadata.lower_border_first
+        upper_border_last,      // metadata.upper_border_last
+        file,                   // metadata.file
+        line                    // metadata.line
+    };
+    actives.insert({(uintptr_t)ptr, metadata});
+
+    // Set memory in border regions to `BORD_CHAR`
+    size_t lower_border_sz = BORD_SZ;
+    size_t upper_border_sz = allotment - (sz + BORD_SZ);
+    uintptr_t upper_border_first = upper_border_last + 1 - upper_border_sz;
+    memset((void*)lower_border_first, BORD_CHAR, lower_border_sz);
+    memset((void*)upper_border_first, BORD_CHAR, upper_border_sz);
 }
 
 
@@ -346,8 +361,8 @@ void* m61_find_free_space(size_t allotment) {
 /// sz_to_allot(sz)
 ///     Helper to safely translate from size to allotment
 ///     Allotment is the size of an m61_malloc, but also accounting for the
-///       fence-post borders and alignment adjustments
-///     Returns an adjusted allotment, will return 0 if overflow is detected
+///       fence-post canary borders and alignment adjustments
+///     Returns an adjusted allotment, will return `0` if overflow is detected
 
 size_t sz_to_allot(size_t sz) {
     
@@ -364,7 +379,7 @@ size_t sz_to_allot(size_t sz) {
         return 0;
     }
 
-    // Align allotment size to alignof(std::max_align_t)
+    // Align allotment size to `alignof(std::max_align_t)`
     allotment += extra;    
     // Add two border zones of size BORD_SZ to allotment size
     allotment += 2 * BORD_SZ;
