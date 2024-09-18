@@ -6,11 +6,13 @@
 #include <cstdio>
 #include <new>
 #include <random>
+// Additional includes
+#include <map>
 
 
 /// ADDED HEADER DEFINITIONS:
 
-/// meta
+/// struct meta
 ///     Structure of the metatdata carried by actives
 struct meta {
     size_t size;
@@ -19,6 +21,14 @@ struct meta {
     const char* file;
     int line;
 };
+
+/// type actives_t
+///     Type of the actives map
+typedef std::map<uintptr_t, meta> actives_t;
+
+/// type inactives_t
+///     Type of the inactives map
+typedef std::map<uintptr_t, size_t> inactives_t;
 
 /// m61_activate_mem(ptr, sz, allotment, file, line)
 ///     Adds the allocation described by the arguments, as well as the

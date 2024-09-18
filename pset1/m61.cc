@@ -8,7 +8,6 @@
 #include <sys/mman.h>
 // Additional includes
 #include <iostream>
-#include <map>
 #include <set>
 
 
@@ -55,8 +54,9 @@ m61_memory_buffer::~m61_memory_buffer() {
 // Constant of system alignment
 static const size_t quantum = alignof(std::max_align_t);
 
-// Metadata objects
-// Memory statistics tracker
+// Global, external metadata objects
+// stats
+//     Memory statistics tracker
 static m61_statistics stats = {
     0,                                  // # active allocations
     0,                                  // # bytes in active allocations
@@ -67,17 +67,27 @@ static m61_statistics stats = {
     (uintptr_t)default_buffer.buffer,   // smallest allocated addr
     (uintptr_t)default_buffer.buffer    // largest allocated addr
 };
-// Elt in actives is {ptr, metadata} (See struct meta in "m61.hh")
-static std::map<uintptr_t, meta> actives;
-// Elt in inactives is {ptr, allotment}
+
+// actives
+//     std::map of all currently active allocations
+//     Elt in actives is {ptr, metadata}
+//     See type actives_t and substruct meta in "m61.hh"
+static actives_t actives;
+
+// inactives
+//     std::map of all currently inactive allocations
+//     Elt in inactives is {ptr, allotment}
+//     See type inactives_t in "m61.hh"
 //     Allotment defined below by `sz_to_allot()`
-static std::map<uintptr_t, size_t> inactives = {
+static inactives_t inactives = {
     {
         (uintptr_t)default_buffer.buffer + BORD_SZ,     // lowest allocable addr
         default_buffer.size                             // total buffer allot
     }
 };
-// Tracks set of previous freed pointers
+
+// frees
+//     Set of previously freed pointers - set of currently allocated pointers
 static std::set<void*> frees;
 
 
@@ -119,7 +129,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     // Reinsert leftover memory from inactive chunk into inactives
     {
-        auto iter = inactives.find((uintptr_t)ptr);
+        inactives_t::iterator iter = inactives.find((uintptr_t)ptr);
         if (allotment != iter->second) {
             uintptr_t remainder_ptr = (uintptr_t)ptr + allotment;
             size_t remainder_allotment = iter->second - allotment;
@@ -130,7 +140,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     // Add allocation and metadata to `actives`, set border canaries
     m61_activate_mem(ptr, sz, allotment, file, line);
-    auto active_iter = actives.find((uintptr_t)ptr);
+    actives_t::iterator active_iter = actives.find((uintptr_t)ptr);
 
 
     // Update `frees`
@@ -171,7 +181,7 @@ void m61_free(void* ptr, const char* file, int line) {
     m61_free_bug_detect(ptr, file, line);
 
     // Find `ptr` in actives, pull data into locals
-    auto elt_to_free = actives.find((uintptr_t)ptr);
+    actives_t::iterator elt_to_free = actives.find((uintptr_t)ptr);
     size_t sz = elt_to_free->second.size;
     size_t allotment = sz_to_allot(sz);
 
@@ -254,11 +264,13 @@ void m61_activate_mem(void* ptr, size_t sz, size_t allotment,
 
 void* m61_find_free_space(size_t allotment) {
     void* ptr = nullptr;
-    for (auto iter = inactives.begin(); iter != inactives.end(); iter++) {
-        if (allotment <= iter->second) {
-            ptr = (void*)iter->first;
-            break;
-        }
+    for (inactives_t::iterator iter = inactives.begin();
+         iter != inactives.end();
+         iter++) {
+            if (allotment <= iter->second) {
+                ptr = (void*)iter->first;
+                break;
+            }
     }
     return ptr;
 }
@@ -270,7 +282,7 @@ void* m61_find_free_space(size_t allotment) {
 void m61_free_bug_detect(void* ptr, const char* file, int line) {
 
     // Pull the entry in `actives` for this free attempt
-    auto elt_to_free = actives.find((uintptr_t)ptr);
+    actives_t::iterator elt_to_free = actives.find((uintptr_t)ptr);
 
     // Bug Detection
     // Double Free
@@ -290,7 +302,7 @@ void m61_free_bug_detect(void* ptr, const char* file, int line) {
     if (elt_to_free == actives.end()) {
         std::cerr << "MEMORY BUG: " << file << ':' << line
             << ": invalid free of pointer " << ptr << ", not allocated\n";
-        auto prev_active = actives.upper_bound((uintptr_t)ptr);
+        actives_t::iterator prev_active = actives.upper_bound((uintptr_t)ptr);
         if (prev_active != actives.begin()) {
             prev_active--;
             if (prev_active != actives.begin()) {
@@ -351,8 +363,8 @@ void m61_free_bug_detect(void* ptr, const char* file, int line) {
 
 void m61_coalesce(void* ptr) {
     // Coalesce up
-    auto iter = inactives.find((uintptr_t)ptr);
-    auto next = iter;
+    inactives_t::iterator iter = inactives.find((uintptr_t)ptr);
+    inactives_t::iterator next = iter;
     if (next != inactives.end()) {
         next++;
         if (iter != inactives.end() && next != inactives.end()
@@ -363,7 +375,7 @@ void m61_coalesce(void* ptr) {
     }
 
     // Coalesce down
-    auto prev = iter;
+    inactives_t::iterator prev = iter;
     if (prev != inactives.begin()) {
         prev--;
         if (iter != inactives.begin()
@@ -438,12 +450,15 @@ void m61_print_statistics() {
 void m61_print_leak_report() {
     // Check actives for leaks (actives is not empty)
     if (!actives.empty()) {
-        for (auto iter = actives.begin(); iter != actives.end(); iter++) {
-            void* ptr = (void*)iter->first;
-            meta metadata = iter->second;
-            std::cout << "LEAK CHECK: " << metadata.file << ':' << metadata.line
-                << ": allocated object " << ptr
-                << " with size " << metadata.size << '\n';
+        for (actives_t::iterator iter = actives.begin();
+             iter != actives.end();
+             iter++) {
+                void* ptr = (void*)iter->first;
+                meta metadata = iter->second;
+                std::cout << "LEAK CHECK: "
+                    << metadata.file << ':' << metadata.line
+                    << ": allocated object " << ptr
+                    << " with size " << metadata.size << '\n';
         }
     }
 }
