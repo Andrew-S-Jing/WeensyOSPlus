@@ -30,11 +30,11 @@ typedef std::map<uintptr_t, meta> actives_t;
 ///     Type of the inactives map
 typedef std::map<uintptr_t, size_t> inactives_t;
 
-/// m61_activate_mem(ptr, sz, allotment, file, line)
+/// m61_activate_mem(addr, sz, allotment, file, line)
 ///     Adds the allocation described by the arguments, as well as the
 ///       corresponding metadata to `actives`.
 ///     Also establishes the canary borders above and below the allocation
-void m61_activate_mem(void* ptr, size_t sz, size_t allotment,
+void m61_activate_mem(uintptr_t addr, size_t sz, size_t allotment,
                       const char* file, int line);
 
 /// m61_find_free_space(allotment)
@@ -49,15 +49,16 @@ void* m61_find_free_space(size_t allotment);
 ///       double-searching through the actives map.
 actives_t::iterator m61_free_bug_detect(void* ptr, const char* file, int line);
 
-/// m61_coalesce(ptr)
+/// m61_coalesce(addr)
 ///     Coalesces the `inactives` element with key `(uintptr_t)ptr` with its
 ///       immediate upwards neighbor and immediate downwards neighbor
-void m61_coalesce(void* ptr);
+void m61_coalesce(uintptr_t addr);
 
 /// sz_to_allot(sz)
 ///     Helper to safely translate from size to allotment
-///     Allotment is the size of an m61_malloc, but also accounting for the fence-post borders and alignment adjustments
-///     sz_to_allot(sz) returns an adjusted allotment, will return 0 if overflow is detected
+///     Allotment is the size of an m61_malloc, but also accounting for the
+///       fence-post canary borders and alignment adjustments
+///     Returns an adjusted allotment, will return `0` if overflow is detected
 size_t sz_to_allot(size_t sz);
 
 
