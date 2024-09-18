@@ -177,11 +177,10 @@ void m61_free(void* ptr, const char* file, int line) {
         return;
     }
     
-    // Call `abort()` if any bugs are detected
-    m61_free_bug_detect(ptr, file, line);
+    // Call `abort()` on bug detected, get iterator for elt with key `ptr`
+    actives_t::iterator elt_to_free = m61_free_bug_detect(ptr, file, line);
 
     // Find `ptr` in actives, pull data into locals
-    actives_t::iterator elt_to_free = actives.find((uintptr_t)ptr);
     size_t sz = elt_to_free->second.size;
     size_t allotment = sz_to_allot(sz);
 
@@ -278,8 +277,10 @@ void* m61_find_free_space(size_t allotment) {
 
 /// m61_free_bug_detect(ptr, file, line)
 ///     If any memory bugs during the process of `m61_free()`, calls `abort()`.
+///     Returns the iterator to the element to be freed by m61_free() to avoid
+///       double-searching through the actives map.
 
-void m61_free_bug_detect(void* ptr, const char* file, int line) {
+actives_t::iterator m61_free_bug_detect(void* ptr, const char* file, int line) {
 
     // Pull the entry in `actives` for this free attempt
     actives_t::iterator elt_to_free = actives.find((uintptr_t)ptr);
@@ -354,6 +355,9 @@ void m61_free_bug_detect(void* ptr, const char* file, int line) {
             }
         }
     }
+
+    // Return the element to be freed
+    return elt_to_free;
 }
 
 
@@ -362,6 +366,7 @@ void m61_free_bug_detect(void* ptr, const char* file, int line) {
 ///       immediate upwards neighbor and immediate downwards neighbor
 
 void m61_coalesce(void* ptr) {
+    
     // Coalesce up
     inactives_t::iterator iter = inactives.find((uintptr_t)ptr);
     inactives_t::iterator next = iter;

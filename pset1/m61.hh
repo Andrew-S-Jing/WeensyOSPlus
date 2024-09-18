@@ -45,7 +45,9 @@ void* m61_find_free_space(size_t allotment);
 
 /// m61_free_bug_detect(ptr, file, line)
 ///     If any memory bugs during the process of `m61_free()`, calls `abort()`.
-void m61_free_bug_detect(void* ptr, const char* file, int line);
+///     Returns the iterator to the element to be freed by m61_free() to avoid
+///       double-searching through the actives map.
+actives_t::iterator m61_free_bug_detect(void* ptr, const char* file, int line);
 
 /// m61_coalesce(ptr)
 ///     Coalesces the `inactives` element with key `(uintptr_t)ptr` with its
