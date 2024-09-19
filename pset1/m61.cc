@@ -412,18 +412,18 @@ size_t sz_to_allot(size_t sz) {
     // Prepare for allotment adjustments
     size_t allotment = sz;
     size_t misalign = sz % quantum;
-    size_t extra = 0;
+    size_t fragmentation = 0;
     if (misalign != 0) {
-        extra = quantum - misalign;
+        fragmentation = quantum - misalign;
     }
 
     // Detect overflow
-    if (allotment > SIZE_MAX - (extra + 2 * BORD_SZ)) {
+    if (allotment > SIZE_MAX - (fragmentation + 2 * BORD_SZ)) {
         return 0;
     }
 
     // Align allotment size to `alignof(std::max_align_t)`
-    allotment += extra;    
+    allotment += fragmentation;    
     // Add two border zones of size BORD_SZ to allotment size
     allotment += 2 * BORD_SZ;
 
