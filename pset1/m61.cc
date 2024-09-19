@@ -128,6 +128,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         stats.fail_size += sz;
         return nullptr;
     }
+    assert(addr % quantum == 0);
 
     // Reinsert leftover memory from inactive chunk into inactives
     {
@@ -143,6 +144,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     // Add allocation and metadata to `actives`, set border canaries
     m61_activate_mem(addr, sz, allotment, file, line);
     actives_t::iterator active_iter = actives.find(addr);
+    assert(active_iter != actives.end());
 
 
     // Update `frees`
@@ -159,6 +161,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     if (active_iter->second.upper_border_last > stats.heap_max) {
         stats.heap_max = active_iter->second.upper_border_last;
     }
+    assert(stats.heap_min <= stats.heap_max);
 
 
     // Return `ptr`
@@ -181,11 +184,14 @@ void m61_free(void* ptr, const char* file, int line) {
     
     // Call `abort()` on bug detected, get iterator for elt with key `ptr`
     actives_t::iterator elt_to_free = m61_free_bug_detect(ptr, file, line);
+    assert(elt_to_free != actives.end());
 
     // Pull data into locals
     size_t sz = elt_to_free->second.size;
     size_t allotment = sz_to_allot(sz);
     uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+    assert(allotment != 0);
+    assert(addr % quantum == 0);
 
     // Free from `actives`
     actives.erase(addr);
@@ -336,6 +342,8 @@ actives_t::iterator m61_free_bug_detect(void* ptr, const char* file, int line) {
     uintptr_t upper_border_last = elt_to_free->second.upper_border_last;
     size_t sz = elt_to_free->second.size;
     size_t allotment = sz_to_allot(sz);
+    assert(allotment != 0);
+    assert(addr % quantum == 0);
 
     // Bug Detection (Cont.)
     // Fence-Post Write (Border Write)
@@ -380,7 +388,8 @@ void m61_coalesce(uintptr_t addr) {
     inactives_t::iterator next = iter;
     if (next != inactives.end()) {
         next++;
-        if (iter != inactives.end() && next != inactives.end()
+        if (iter != inactives.end()
+            && next != inactives.end()
             && iter->first + iter->second == next->first) {
                 iter->second += next->second;
                 inactives.erase(next);
