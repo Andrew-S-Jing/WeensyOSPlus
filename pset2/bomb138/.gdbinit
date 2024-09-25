@@ -2,7 +2,6 @@ display/i $pc
 display/s 0x4053e0
 display/s 0x405480
 
-b phase2
 b phase3
 b phase4
 b phase5
