@@ -1,0 +1,806 @@
+bomb138/README.md
+0000644
+0013435
+0013436
+00000000172
+14674655031
+013064
+ustar  
+kohler
+kohler
+CS 61 Problem Set 2
+===================
+This is bomb #138.
+It belongs to andrew_jing (andrew_jing@college.harvard.edu).
+bomb138/bomb.cc
+0000644
+0013435
+0013436
+00000004612
+14674655031
+013036
+ustar  
+kohler
+kohler
+/*****************************************************************************/
+//         
+//       
+//        
+)          welcome
+//       
+    >
+//       
+     / 
+//       
+/   
+                            to
+//            
+//       
+//       
+//       
+//       
+         this bomb
+//        
+//       
+ | |
+ ) /
+//        
+//        (_
+/*****************************************************************************/
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include "support.hh"
+#include "phases.hh"
+FILE* infile = stdin;
+int main(int argc, char *argv[]) {
+    // When run with no arguments, the bomb reads its input lines
+    // from standard input.
+    // When run with one argument <file>, the bomb reads from <file>
+    // until EOF, and then switches to standard input. Thus, as you
+    // defuse each phase, you can add its defusing string to <file> and
+    // avoid having to retype it.
+    if (argc == 2 && strcmp(argv[1], "-") != 0) {
+        infile = fopen(argv[1], "r");
+        if (!infile) {
+            printf("%s: Error: Couldn't open %s\n", argv[0], argv[1]);
+            exit(8);
+        }
+    } else if (argc > 2) {
+        printf("Usage: %s [FILE]\n", argv[0]);
+        exit(8);
+    }
+    // The `initialize_bomb` function will never explode.
+    initialize_bomb();
+    printf("Step carefully.\n");
+    char* input = read_line();       // Get input
+    phase1(input);                  // Run the phase
+    phase_defused();                 // Sends network message (you can ignore)
+    printf("PHASE 1 DEFUSED.\n");
+    // loops are for luzers
+    input = read_line();
+    phase2(input);
+    phase_defused();
+    printf("PHASE 2 DEFUSED.\n");
+    input = read_line();
+    phase3(input);
+    phase_defused();
+    printf("PHASE 3 DEFUSED.\n");
+    input = read_line();
+    phase4(input);
+    phase_defused();
+    printf("PHASE 4 DEFUSED.\n");
+    input = read_line();
+    phase5(input);
+    phase_defused();
+    printf("PHASE 5 DEFUSED.\n");
+    input = read_line();
+    phase6(input);
+    phase_defused();
+    printf("PHASE 6 DEFUSED.\n");
+    input = read_line();
+    phase7(input);
+    phase_defused();
+    printf("PHASE 7 DEFUSED.\n");
+    // And that's it! OR IS IT??
+    return 0;
+bomb138/bomb
+0000755
+0013435
+0013436
+00000134070
+14674655031
+012457
+ustar  
+kohler
+kohler
+/lib64/ld-linux-x86-64.so.2
+Pu&v
+__gmon_start__
+fgets
+read
+alarm
+write
+connect
+memmove
+__assert_fail
+__libc_start_main
+strtoul
+strcmp
+fprintf
+socket
+signal
+fopen
+strcpy
+strspn
+strtol
+sigemptyset
+setvbuf
+stdout
+puts
+close
+strlen
+sleep
+sprintf
+isspace
+stdin
+gethostbyname
+stderr
+sigaction
+_exit
+__errno_location
+__isoc99_sscanf
+__cxa_atexit
+libstdc++.so.6
+libm.so.6
+libgcc_s.so.1
+libc.so.6
+GLIBC_2.7
+GLIBC_2.34
+GLIBC_2.2.5
+ATSH
+[A\]
+PTE1
+H=xS@
+AUATI
+[A\A]]
+[A\A]]
+AUATI
++[A\A]]
+ATSH
+8*u(D
+[A\]
+ATSH
+8-u'D
+D+#D
+[A\]
+t0UH
+|$t.H
+[A\]
+ATSH
+[A\A]A^A_]
+[A\A]A^A_]
+AVAUATA
+vA< 
+[A\A]A^A_]
+[A\]
+AUATI
+[A\A]A^]
+[A\A]A^]
+%s: Error: Couldn't open %s
+Usage: %s [FILE]
+Step carefully.
+PHASE 1 DEFUSED.
+PHASE 2 DEFUSED.
+PHASE 3 DEFUSED.
+PHASE 4 DEFUSED.
+PHASE 5 DEFUSED.
+PHASE 6 DEFUSED.
+PHASE 7 DEFUSED.
+kale
+0123456789
+ComPUtEr MisCaLCuLaTEd %u
+apple
+grape
+Little one, it's a simple calculus. This universe is finite, its resources, finite.
+CalCUlaTiOn ToO sIMPle, ONlY %d CoOL InPuTs
+CalCUlaTiOn ToO sIMPle, NeED anOtHeR OpERaToR
+Wow! You've defused the secret stage!
+So you think you can stop the bomb with Ctrl-C, do you?
+Curses, you've found the secret phase!
+But finding it and solving it are quite different...
+Congratulations! You defused the bomb!
+Your instructor has been notified and will verify your solution.
+ndefused >= 0 && ndefused < MAX_STRINGS
+ERROR: Input string is too large.
+Your instructor has been notified.
+Well...
+ OK. :)
+%s %s %s %s
+CosmoTheDog
+Invalid phase%s
+Initialization error:
+char* read_line()
+support.cc
+Error: Premature EOF
+Error: Input line too long
+** truncated line **
+defused
+exploded
+%d:%s:%d:%s
+BOOM!!!
+The bomb has blown up.
+%d %d %d %d %d %d
+Program timed out after %d seconds
+Error: Client unable to create socket
+Error: DNS is unable to resolve server address
+Error: Unable to connect to the server
+Error: Result string too large. Increase SUBMITR_MAXBUF
+GET /%s/submitr.pl/?userid=%s&userpwd=%s&lab=%s&result=%s&submit=submit HTTP/1.0
+Error: Client unable to write to the server
+Error: Client unable to read first header from server
+Error: HTTP request failed with error %d: %s
+Error: Client unable to read headers from server
+Error: Client unable to read status message from server
+Error: Result string contains an illegal or unprintable character.
+Error: Unable to connect to server %s
+%%%02X
+%s %d %[a-zA-z ]
+cs61.seas.harvard.edu
+AUTORESULT_STRING=%s
+f20-pset2
+csapp
+;*3$"
+w3uf7Vw4C6rPNNbUiiXb
+andrew_jing
+GCC: (GNU) 11.4.1 20230605 (Red Hat 11.4.1-2)
+GCC: (GNU) 13.2.0
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+3p1093
+running gcc 11.4.1 20230605
+annobin gcc 11.3.1 20221121
+plugin name: annobin
+GA*GOW
+GA+stack_clash
+GA*cf_protection
+GA*FORTIFY
+GA+GLIBCXX_ASSERTIONS
+GA+omit_frame_pointer
+GA!stack_realign
+"std
+(div
++div
+getenv
+_shortbuf
+strrchr
+_IO_lock_t
+setvbuf
+input
+remove
+system
+_IO_buf_end
+fflush
+mblen
+_IO_write_end
+__gnu_cxx
+_freeres_list
+_flags
+wchar_t
+strerror
+_markers
+strpbrk
+_ZN9__gnu_cxx3divExx
+strtoull
+ungetc
+_Z6phase5Pc
+strtold
+strtoll
+strcpy
+mbtowc
+read_line
+_IO_save_end
+__count
+float
+fgetpos
+_IO_codecvt
+long long unsigned int
+initialize_bomb
+wctomb
+_IO_backup_base
+lldiv
+atoll
+_fileno
+phase1
+phase2
+size_t
+phase4
+phase5
+srand
+phase7
+strxfrm
+strtok
+_IO_read_base
+bsearch
+argc
+stdin
+clearerr
+_Z6phase7Pc
+_Z6phase3Pc
+freopen
+__value
+strcoll
+memchr
+_mode
+5div_t
+ferror
+_IO_marker
+_IO_read_ptr
+long long int
+__wch
+_Z15initialize_bombv
+__builtin_puts
+quot
+rename
+__pos
+mbstowcs
+getchar
+_IO_write_base
+tmpnam
+setbuf
+perror
+printf
+_IO_save_base
+_Z13phase_defusedv
+fseek
+__compar_fn_t
+_freeres_buf
+_Z6phase6Pc
+fsetpos
+ftell
+__pad5
+_Z6phase1Pc
+fgetc
+fopen
+_vtable_offset
+fgets
+__fpos_t
+argv
+long double
+main
+__static_initialization_and_destruction_0
+_IO_read_end
+strchr
+short int
+_Z9read_linev
+fread
+11__mbstate_t
+atexit
+_GLOBAL__sub_I_infile
+_IO_wide_data
+memcmp
+__wchb
+fclose
+rewind
+phase3
+phase6
+at_quick_exit
+_G_fpos_t
+_Z6phase4Pc
+_lock
+strtoul
+GNU C++23 13.2.0 -mtune=generic -march=x86-64 -ggdb -O2 -std=gnu++23 -fno-builtin-strcpy -fno-builtin-strlen -fno-builtin-strcmp -fno-builtin-strchr -fno-builtin-memcmp -fno-omit-frame-pointer -fno-optimize-strlen
+_old_offset
+_IO_FILE
+strstr
+phase_defused
+unsigned char
+tmpfile
+_IO_write_ptr
+strtod
+strtof
+feof
+wcstombs
+strtol
+6ldiv_t
+__off_t
+7lldiv_t
+strcmp
+short unsigned int
+atof
+atoi
+atol
+_chain
+__state
+_flags2
+_cur_column
+_Z6phase2Pc
+__off64_t
+_unused2
+_IO_buf_base
+qsort
+/home/kohler/cs61-psets-for-bomb/bomb/src
+bomb.cc
+/opt/gcc/lib/gcc/x86_64-pc-linux-gnu/13.2.0/include
+/usr/include/bits
+/usr/include/bits/types
+/usr/include
+/opt/gcc/include/c++/13.2.0
+/opt/gcc/include/c++/13.2.0/x86_64-pc-linux-gnu/bits
+stddef.h
+types.h
+__mbstate_t.h
+__fpos_t.h
+struct_FILE.h
+stdio.h
+cstdio
+cstdlib
+cstring
+stdlib.h
+stdlib-float.h
+stdlib-bsearch.h
+string.h
+phases.hh
+support.hh
+c++config.h
+crt1.o
+.annobin_abi_note.c
+.annobin_abi_note.c_end
+.annobin_abi_note.c.hot
+.annobin_abi_note.c_end.hot
+.annobin_abi_note.c.unlikely
+.annobin_abi_note.c_end.unlikely
+.annobin_abi_note.c.startup
+.annobin_abi_note.c_end.startup
+.annobin_abi_note.c.exit
+.annobin_abi_note.c_end.exit
+__abi_tag
+.annobin_init.c
+.annobin_init.c_end
+.annobin_init.c.hot
+.annobin_init.c_end.hot
+.annobin_init.c.unlikely
+.annobin_init.c_end.unlikely
+.annobin_init.c.startup
+.annobin_init.c_end.startup
+.annobin_init.c.exit
+.annobin_init.c_end.exit
+.annobin_static_reloc.c
+.annobin_static_reloc.c_end
+.annobin_static_reloc.c.hot
+.annobin_static_reloc.c_end.hot
+.annobin_static_reloc.c.unlikely
+.annobin_static_reloc.c_end.unlikely
+.annobin_static_reloc.c.startup
+.annobin_static_reloc.c_end.startup
+.annobin_static_reloc.c.exit
+.annobin_static_reloc.c_end.exit
+.annobin__dl_relocate_static_pie.start
+.annobin__dl_relocate_static_pie.end
+bomb.cc
+_GLOBAL__sub_I_infile
+crtstuff.c
+deregister_tm_clones
+__do_global_dtors_aux
+completed.0
+__do_global_dtors_aux_fini_array_entry
+frame_dummy
+__frame_dummy_init_array_entry
+phases.cc
+_ZL6ftable
+support.cc
+_ZL11sig_handleri
+_Z1ev.part.0
+_ZL20current_input_string
+driverlib.cc
+_ZL13rio_readlinebP5rio_tPvm.constprop.0
+__FRAME_END__
+__GNU_EH_FRAME_HDR
+_DYNAMIC
+_GLOBAL_OFFSET_TABLE_
+node2
+setvbuf@GLIBC_2.2.5
+__errno_location@GLIBC_2.2.5
+_Z18phase5_word1_word2PKcS0_
+isspace@GLIBC_2.2.5
+stdout@GLIBC_2.2.5
+bomb_id
+_Z6phase1Pc
+sprintf@GLIBC_2.2.5
+_Z6phase5Pc
+_Z6phase3Pc
+_Z12phase5_word2PKcm
+_edata
+socket@GLIBC_2.2.5
+_Z6phase7Pc
+ndefused
+_Z15sigalrm_handleri
+strtoul@GLIBC_2.2.5
+node1
+_Z12secret_phasev
+_Z10calc6_exprPcP5calc6
+_IO_stdin_used
+write@GLIBC_2.2.5
+_Z12calc6_factorPcP5calc6
+strspn@GLIBC_2.2.5
+strlen@GLIBC_2.2.5
+_Z12init_timeouti
+main
+userid
+__dso_handle
+__assert_fail@GLIBC_2.2.5
+_Z21initialize_bomb_solvev
+_Z6phase4Pc
+atexit
+_fini
+__libc_start_main@GLIBC_2.34
+_dl_relocate_static_pie
+sleep@GLIBC_2.2.5
+stdin@GLIBC_2.2.5
+connect@GLIBC_2.2.5
+__cxa_atexit@GLIBC_2.2.5
+strcpy@GLIBC_2.2.5
+_Z11init_driverPc
+_Z13invalid_phasePc
+__isoc99_sscanf@GLIBC_2.7
+host_table
+node6
+_init
+gethostbyname@GLIBC_2.2.5
+__TMC_END__
+fopen@GLIBC_2.2.5
+signal@GLIBC_2.2.5
+_Z2f8P14treeNodeStructi
+sigemptyset@GLIBC_2.2.5
+sigaction@GLIBC_2.2.5
+node5
+stderr@GLIBC_2.2.5
+_Z11driver_postPcS_S_iS_
+__data_start
+strcmp@GLIBC_2.2.5
+strtol@GLIBC_2.2.5
+fprintf@GLIBC_2.2.5
+read@GLIBC_2.2.5
+_Z15initialize_bombv
+input_strings
+_Z7submitrPKciS0_S0_S0_S0_S0_Pc
+__bss_start
+_Z12phase5_word1PKc
+_Z9read_linev
+node4
+puts@GLIBC_2.2.5
+fgets@GLIBC_2.2.5
+memmove@GLIBC_2.2.5
+_exit@GLIBC_2.2.5
+_Z10blank_linePc
+_Z6phase2Pc
+_Z6phase6Pc
+node3
+_Z12explode_bombv
+_Z13phase_defusedv
+_Z10calc6_termPcP5calc6
+user_password
+_Z16read_six_numbersPKcPi
+_Z1ev
+__gmon_start__
+alarm@GLIBC_2.2.5
+_Z8send_msgi
+close@GLIBC_2.2.5
+.symtab
+.strtab
+.shstrtab
+.interp
+.note.gnu.property
+.note.gnu.build-id
+.note.ABI-tag
+.gnu.hash
+.dynsym
+.dynstr
+.gnu.version
+.gnu.version_r
+.rela.dyn
+.rela.plt
+.init
+.text
+.fini
+.rodata
+.eh_frame_hdr
+.eh_frame
+.init_array
+.fini_array
+.dynamic
+.got
+.got.plt
+.data
+.bss
+.comment
+.gnu.build.attributes
+.debug_aranges
+.debug_info
+.debug_abbrev
+.debug_line
+.debug_str
+.debug_line_str
+.debug_loclists
+.debug_rnglists
+bomb138/bomb.gdb
+0000755
+0013435
+0013436
+00000000615
+14674655031
+013207
+ustar  
+kohler
+kohler
+set arch i386:x86-64
+file bomb
+init-if-undefined $run_bomb_continue = 0
+define run-bomb
+  if $_thread != 0
+    kill
+  end
+  shell killall qemu-x86_64 >/dev/null 2>&1
+  shell qemu-x86_64 -g 12948 bomb sol.txt & sleep 0.2
+  target remote localhost:12948
+  if $run_bomb_continue != 0
+    continue
+  end
+document run-bomb
+  Restart the bomb with sol.txt as input.
+define rb
+  run-bomb
