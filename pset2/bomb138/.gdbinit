@@ -1,10 +1,7 @@
 display/i $pc
+display/s 0x4053e0
+display/s 0x405480
 
-layout asm
-layout regs
-
-b initialize_bomb
-b phase1
 b phase2
 b phase3
 b phase4
