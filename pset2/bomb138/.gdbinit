@@ -1,9 +1,9 @@
 display/i $pc
-display/s $rdi
-display/s $rsi
+display/3dg 0x405110
+display/dg $rdi
+display/dg $rsi
 
-b *0x401b60
-b *0x401ae1
 b secret_phase
+    b *0x4019d0
 
 b explode_bomb
