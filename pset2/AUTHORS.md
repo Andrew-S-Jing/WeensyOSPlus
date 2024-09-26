@@ -3,7 +3,7 @@ Author and collaborators
 
 Student
 -------
-(Your name.)
+Andrew Jing
 
 
 Collaborators
