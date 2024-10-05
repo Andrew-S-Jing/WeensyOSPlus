@@ -359,6 +359,19 @@ uintptr_t syscall(regstate* regs) {
 //    in `u-lib.hh` (but in the handout code, it does not).
 
 int syscall_page_alloc(uintptr_t addr) {
+
+    {
+        // Isolate kernel mem from user calls to `syscall_page_alloc`
+        // Fail with `-2' if `addr` not page-aligned or outside user mem space
+        bool misaligned, inaccessible;
+        misaligned = (addr & PAGEOFFMASK) != 0;
+        inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
+        if (misaligned || inaccessible) {
+            
+            return -2;
+        }
+    }
+
     assert(physpages[addr / PAGESIZE].refcount == 0);
     ++physpages[addr / PAGESIZE].refcount;
     memset((void*) addr, 0, PAGESIZE);
