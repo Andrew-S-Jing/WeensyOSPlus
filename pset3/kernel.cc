@@ -160,6 +160,25 @@ void kfree(void* kptr) {
 }
 
 
+// process_setup_page_alloc(pid, va)
+//    Allocates a currently free page in phys mem and maps that address to `va`
+//    in the pagetable for process `pid`. Gives process permissions in allocated
+//    page.
+//    Assumes there is enough phys mem to initialize all processes.
+
+void process_setup_page_alloc(pid_t pid, uintptr_t va) {
+    void* kptr = kalloc(PAGESIZE);
+    assert(kptr);
+    uintptr_t pageno = reinterpret_cast<uintptr_t>(kptr) / PAGESIZE;
+    // Disallow users-shared pages in process mem
+    assert(physpages[pageno].refcount == 1);
+    // Give user access to newly allocated page
+    int r = vmiter(ptable[pid].pagetable, va)
+        .try_map(kptr, PTE_P | PTE_W | PTE_U);
+    assert(r == 0);
+}
+
+
 // process_setup(pid, program_name)
 //    Load application program `program_name` as process number `pid`.
 //    This loads the application's code and data into memory, sets its
@@ -170,6 +189,7 @@ void process_setup(pid_t pid, const char* program_name) {
 
     // initialize process page table
     ptable[pid].pagetable = kalloc_pagetable();
+    assert(ptable[pid].pagetable);
     // Map kernel mem to user pagetable
     for (uint64_t addr = 0; addr < PROC_START_ADDR; addr += PAGESIZE) {
         vmiter k_pte = vmiter(kernel_pagetable, addr);
@@ -188,24 +208,15 @@ void process_setup(pid_t pid, const char* program_name) {
              a < seg.va() + seg.size();
              a += PAGESIZE) {
             // `a` is the process virtual address for the next code/data page
-            // (The handout code requires that the corresponding physical
-            // address is currently free.)
-            assert(physpages[a / PAGESIZE].refcount == 0);
-            ++physpages[a / PAGESIZE].refcount;
-            // Map process code/data in user pagetable
-            {
-                vmiter k_pte = vmiter(kernel_pagetable, a);
-                int r = vmiter(ptable[pid].pagetable, a)
-                    .try_map(k_pte.pa(), k_pte.perm());
-                assert(r == 0);
-            }
+            process_setup_page_alloc(pid, a);
         }
     }
 
     // copy instructions and data from program image into process memory
     for (auto seg = pgm.begin(); seg != pgm.end(); ++seg) {
-        memset((void*) seg.va(), 0, seg.size());
-        memcpy((void*) seg.va(), seg.data(), seg.data_size());
+        void* kptr = vmiter(ptable[pid].pagetable, seg.va()).kptr();
+        memset(kptr, 0, seg.size());
+        memcpy(kptr, seg.data(), seg.data_size());
     }
 
     // mark entry point
@@ -214,18 +225,8 @@ void process_setup(pid_t pid, const char* program_name) {
     // allocate and map stack segment
     // Compute process virtual address for stack page
     uintptr_t stack_addr = PROC_START_ADDR + PROC_SIZE * pid - PAGESIZE;
-    // The handout code requires that the corresponding physical address
-    // is currently free.
-    assert(physpages[stack_addr / PAGESIZE].refcount == 0);
-    ++physpages[stack_addr / PAGESIZE].refcount;
     ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
-    // Map stack page to user pagetable
-    {
-        vmiter k_pte = vmiter(kernel_pagetable, stack_addr);
-        int r = vmiter(ptable[pid].pagetable, stack_addr)
-            .try_map(k_pte.pa(), k_pte.perm());
-        assert(r == 0);
-    }
+    process_setup_page_alloc(pid, stack_addr);
 
     // mark process as runnable
     ptable[pid].state = P_RUNNABLE;
@@ -393,19 +394,19 @@ int syscall_page_alloc(uintptr_t addr) {
 
     // Map allocated page to user pagetable
     {
-        void* pa = kalloc(PAGESIZE);
+        void* kptr = kalloc(PAGESIZE);
         // Fail with `-1` if out of mem
-        if (pa == nullptr) {
+        if (!kptr) {
             return -1;
         }
-        uintptr_t pageno = reinterpret_cast<uintptr_t>(pa) / PAGESIZE;
+        int pageno = reinterpret_cast<uintptr_t>(kptr) / PAGESIZE;
         // Disallow users-shared pages
         assert(physpages[pageno].refcount == 1);
         // Give user access to newly allocated page
         int r = vmiter(ptable[current->pid].pagetable, addr)
-            .try_map(pa, PTE_P | PTE_W | PTE_U);
+            .try_map(kptr, PTE_P | PTE_W | PTE_U);
         assert(r == 0);
-        memset(pa, 0, PAGESIZE);
+        memset(kptr, 0, PAGESIZE);
     }
 
     return 0;
