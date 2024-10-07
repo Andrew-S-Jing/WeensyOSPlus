@@ -242,10 +242,13 @@ void process_setup(pid_t pid, const char* program_name) {
     ptable[pid].regs.reg_rip = pgm.entry();
 
     // allocate and map stack segment
-    // Compute process virtual address for stack page
-    uintptr_t stack_addr = PROC_START_ADDR + PROC_SIZE * pid - PAGESIZE;
-    ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
-    process_setup_page_alloc(pid, stack_addr);
+    {
+        // Compute process virtual address for stack page
+        uintptr_t va_last = MEMSIZE_VIRTUAL - 1;
+        uintptr_t stack_addr = (va_last) - (va_last & PAGEOFFMASK);
+        ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
+        process_setup_page_alloc(pid, stack_addr);
+    }
 
     // mark process as runnable
     ptable[pid].state = P_RUNNABLE;
