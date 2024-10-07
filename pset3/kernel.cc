@@ -66,8 +66,8 @@ void kernel_start(const char* command) {
         if (addr == 0) {
             // nullptr is inaccessible even to the kernel
             perm = 0;
-        } else if (addr != CONSOLE_ADDR) {
-            // memory (except CGA console) is inaccessible to user
+        } else if (addr < PROC_START_ADDR && addr != CONSOLE_ADDR) {
+            // kernel memory (except CGA console) is inaccessible to user
             perm -= PTE_U;
         }
         // install identity mapping
@@ -170,18 +170,12 @@ void process_setup(pid_t pid, const char* program_name) {
 
     // initialize process page table
     ptable[pid].pagetable = kalloc_pagetable();
-    for (uint64_t it = 0; it < MEMSIZE_VIRTUAL; it += PAGESIZE) {
-        // Load kernel mem into process pagetable
-        uint64_t this_proc = PROC_START_ADDR + (pid - 1) * PROC_SIZE;
-        bool is_kernel, is_this_proc;
-        is_kernel = it < PROC_START_ADDR;
-        is_this_proc = it >= this_proc && it < this_proc + PROC_SIZE;
-        if (is_kernel || is_this_proc) {
-            vmiter addr = vmiter(kernel_pagetable, it);
-            int perm = addr.perm() | (is_this_proc * PTE_U);
-            int r = vmiter(ptable[pid].pagetable, addr.va()).try_map(addr.pa(), perm);
-            assert(r == 0);
-        }
+    // Map kernel mem to user pagetable
+    for (uint64_t addr = 0; addr < PROC_START_ADDR; addr += PAGESIZE) {
+        vmiter k_pte = vmiter(kernel_pagetable, addr);
+        int r = vmiter(ptable[pid].pagetable, addr)
+            .try_map(k_pte.pa(), k_pte.perm());
+        assert(r == 0);
     }
 
     // obtain reference to program image
@@ -198,6 +192,13 @@ void process_setup(pid_t pid, const char* program_name) {
             // address is currently free.)
             assert(physpages[a / PAGESIZE].refcount == 0);
             ++physpages[a / PAGESIZE].refcount;
+            // Map process memory in user pagetable
+            {
+                vmiter k_pte = vmiter(kernel_pagetable, a);
+                int r = vmiter(ptable[pid].pagetable, a)
+                    .try_map(k_pte.pa(), k_pte.perm());
+                assert(r == 0);
+            }
         }
     }
 
@@ -218,6 +219,13 @@ void process_setup(pid_t pid, const char* program_name) {
     assert(physpages[stack_addr / PAGESIZE].refcount == 0);
     ++physpages[stack_addr / PAGESIZE].refcount;
     ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
+    // Map stack page to user pagetable
+    {
+        vmiter k_pte = vmiter(kernel_pagetable, stack_addr);
+        int r = vmiter(ptable[pid].pagetable, stack_addr)
+            .try_map(k_pte.pa(), k_pte.perm());
+        assert(r == 0);
+    }
 
     // mark process as runnable
     ptable[pid].state = P_RUNNABLE;
