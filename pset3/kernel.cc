@@ -122,8 +122,8 @@ void* kalloc(size_t sz) {
         return nullptr;
     }
 
-    int pageno = 0;
-    int page_increment = 3;
+    static int pageno = 0;
+    int page_increment = 1;
     // In the handout code, `kalloc` returns the first free page.
     // Alternate search strategies can be faster and/or expose bugs elsewhere.
     // This initialization returns a random free page:
