@@ -229,9 +229,8 @@ void process_setup(pid_t pid, const char* program_name) {
                 if (is_first_page) {
                     memcpy((void*) (pte.pa() + seg.va() - a), cursor, size);
                     is_first_page = false;
-                } else {
-                    memcpy(pte.kptr(), cursor, size);
                 }
+                else memcpy(pte.kptr(), cursor, size);
 
                 // Iterate cursor
                 cursor += PAGESIZE;
@@ -396,29 +395,30 @@ uintptr_t syscall(regstate* regs) {
 
 
 // syscall_page_alloc(addr)
-//    Handles the SYSCALL_PAGE_ALLOC system call. This function
-//    should implement the specification for `sys_page_alloc`
-//    in `u-lib.hh` (but in the handout code, it does not).
+//    Handles the SYSCALL_PAGE_ALLOC system call. Implements the specification
+//    for `sys_page_alloc` in `u-lib.hh`.
+//    Returns:
+//      Success: returns  0
+//      Errors:  returns -1 on out-of-mem error
+//               returns -2 on misaligned page addr
+//               returns -3 on permission denied
 
 int syscall_page_alloc(uintptr_t addr) {
 
-    // Fail with `-2` if `addr` not page-aligned or outside user mem space
+    // Fail with `-2` if `addr` not page-aligned, `-3` if outside user mem space
     {
         bool misaligned, inaccessible;
         misaligned = (addr & PAGEOFFMASK) != 0;
         inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
-        if (misaligned || inaccessible) {
-            return -2;
-        }
+        if (misaligned) return -2;
+        if (inaccessible) return -3;
     }    
 
     // Map allocated page to user pagetable
     {
         void* kptr = kalloc(PAGESIZE);
         // Fail with `-1` if out of mem
-        if (!kptr) {
-            return -1;
-        }
+        if (!kptr) return -1;
         int pageno = reinterpret_cast<uintptr_t>(kptr) / PAGESIZE;
         // Disallow users-shared pages
         assert(physpages[pageno].refcount == 1);
