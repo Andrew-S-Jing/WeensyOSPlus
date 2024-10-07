@@ -123,7 +123,7 @@ void* kalloc(size_t sz) {
     }
 
     int pageno = 0;
-    int page_increment = 1;
+    int page_increment = 3;
     // In the handout code, `kalloc` returns the first free page.
     // Alternate search strategies can be faster and/or expose bugs elsewhere.
     // This initialization returns a random free page:
@@ -203,20 +203,34 @@ void process_setup(pid_t pid, const char* program_name) {
     program_image pgm(program_name);
 
     // allocate and map process memory as specified in program image
+    // copy instructions and data from program image into process memory
     for (auto seg = pgm.begin(); seg != pgm.end(); ++seg) {
+        const char* cursor = seg.data();
+        bool is_first_page = true;
+        // `a` is the process virtual address for the next code/data page
         for (uintptr_t a = round_down(seg.va(), PAGESIZE);
              a < seg.va() + seg.size();
              a += PAGESIZE) {
-            // `a` is the process virtual address for the next code/data page
-            process_setup_page_alloc(pid, a);
-        }
-    }
+                // Allocate and map
+                process_setup_page_alloc(pid, a);
+                // Copy code/data
+                {
+                    vmiter pte = vmiter(ptable[pid].pagetable, a);
+                    memset(pte.kptr(), 0, PAGESIZE);
+                    // `size` is either `PAGESIZE` or a smaller value, when less
+                    //   than `PAGESIZE` bytes are to-be-copied in `seg.data()`
+                    int size = min<int>(seg.data() + seg.data_size() - cursor,
+                                        (long)PAGESIZE);
+                    if (is_first_page) {
+                        memcpy((void*)(pte.pa() + seg.va() - a), cursor, size);
+                        is_first_page = false;
+                    } else {
+                        memcpy(pte.kptr(), cursor, size);
+                    }
 
-    // copy instructions and data from program image into process memory
-    for (auto seg = pgm.begin(); seg != pgm.end(); ++seg) {
-        void* kptr = vmiter(ptable[pid].pagetable, seg.va()).kptr();
-        memset(kptr, 0, seg.size());
-        memcpy(kptr, seg.data(), seg.data_size());
+                    cursor += PAGESIZE;
+                }
+        }
     }
 
     // mark entry point
