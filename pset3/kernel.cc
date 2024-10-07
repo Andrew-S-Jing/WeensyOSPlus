@@ -333,7 +333,9 @@ void exception(regstate* regs) {
 }
 
 
+// These functions are defined farther below
 int syscall_page_alloc(uintptr_t addr);
+int syscall_fork(regstate regs);
 
 
 // syscall(regs)
@@ -387,6 +389,9 @@ uintptr_t syscall(regstate* regs) {
     case SYSCALL_PAGE_ALLOC:
         return syscall_page_alloc(current->regs.reg_rdi);
 
+    case SYSCALL_FORK:
+        return syscall_fork(current->regs);
+
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
                    regs->reg_rax, current->pid, regs->reg_rip);
@@ -431,6 +436,35 @@ int syscall_page_alloc(uintptr_t addr) {
         assert(r == 0);
         memset(kptr, 0, PAGESIZE);
     }
+
+    return 0;
+}
+
+
+// syscall_fork(regs)
+//    Does **something**
+
+int syscall_fork(regstate regs) {
+
+    // Find next free PID
+    pid_t pid = 0;
+    for (pid_t procno = 1; procno < PID_MAX; ++procno) {
+        if (ptable[procno].state == P_FREE) {
+            pid = procno;
+            break;
+        }
+    }
+    // Fail on `-1` when there are no free PIDs
+    if (pid == 0) return -1;
+
+    // Create child
+    ptable[pid].pagetable = kalloc_pagetable();
+    memcpy(ptable[pid].pagetable, ptable[current->pid].pagetable, sizeof(x86_64_pagetable));
+    // Copy kernel mem mappings into new pagetable
+    
+
+
+    // Cleanup on fail
 
     return 0;
 }
