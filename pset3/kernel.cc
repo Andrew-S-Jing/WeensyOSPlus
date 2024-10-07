@@ -209,6 +209,7 @@ void process_setup(pid_t pid, const char* program_name) {
         // Broad-scoped vars to help during copying process
         const char* cursor = seg.data();
         bool is_first_page = true;
+        int remaining = seg.data_size();
 
         // `a` is the process virtual address for the next code/data page
         for (uintptr_t a = round_down(seg.va(), PAGESIZE);
@@ -222,18 +223,21 @@ void process_setup(pid_t pid, const char* program_name) {
             {
                 vmiter pte = vmiter(ptable[pid].pagetable, a);
                 memset(pte.kptr(), 0, PAGESIZE);
-                // `size` is either `PAGESIZE` or a smaller value, when less
-                //   than `PAGESIZE` bytes are to-be-copied in `seg.data()`
-                int size = min<int>(seg.data() + seg.data_size() - cursor,
-                                    (long) PAGESIZE);
+                // `size` is the # of bytes to be copied on this page and is
+                //   equal to either `PAGESIZE` or a smaller value, when fewer
+                //   than `PAGESIZE` bytes are to-be-copied in `seg.data()` or
+                //   the first `offset` bytes of 1st-page are before `seg.va()`
+                int size = min(remaining, (int) PAGESIZE);
                 if (is_first_page) {
-                    memcpy((void*) (pte.pa() + seg.va() - a), cursor, size);
+                    uintptr_t offset = seg.va() - a;
+                    size -= offset;
+                    memcpy((void*) (pte.pa() + offset), cursor, size);
                     is_first_page = false;
                 }
                 else memcpy(pte.kptr(), cursor, size);
-
-                // Iterate cursor
+                // Iterate vars
                 cursor += PAGESIZE;
+                remaining -= size;
             }
         }
     }
@@ -386,6 +390,8 @@ uintptr_t syscall(regstate* regs) {
 
     case SYSCALL_PAGE_ALLOC:
         return syscall_page_alloc(current->regs.reg_rdi);
+
+    case SYSCALL_FORK:
 
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
