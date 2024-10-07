@@ -205,31 +205,37 @@ void process_setup(pid_t pid, const char* program_name) {
     // allocate and map process memory as specified in program image
     // copy instructions and data from program image into process memory
     for (auto seg = pgm.begin(); seg != pgm.end(); ++seg) {
+
+        // Broad-scoped vars to help during copying process
         const char* cursor = seg.data();
         bool is_first_page = true;
+
         // `a` is the process virtual address for the next code/data page
         for (uintptr_t a = round_down(seg.va(), PAGESIZE);
-             a < seg.va() + seg.size();
-             a += PAGESIZE) {
-                // Allocate and map
-                process_setup_page_alloc(pid, a);
-                // Copy code/data
-                {
-                    vmiter pte = vmiter(ptable[pid].pagetable, a);
-                    memset(pte.kptr(), 0, PAGESIZE);
-                    // `size` is either `PAGESIZE` or a smaller value, when less
-                    //   than `PAGESIZE` bytes are to-be-copied in `seg.data()`
-                    int size = min<int>(seg.data() + seg.data_size() - cursor,
-                                        (long)PAGESIZE);
-                    if (is_first_page) {
-                        memcpy((void*)(pte.pa() + seg.va() - a), cursor, size);
-                        is_first_page = false;
-                    } else {
-                        memcpy(pte.kptr(), cursor, size);
-                    }
+                 a < seg.va() + seg.size();
+                 a += PAGESIZE) {
+            
+            // Allocate and map
+            process_setup_page_alloc(pid, a);
 
-                    cursor += PAGESIZE;
+            // Copy code/data
+            {
+                vmiter pte = vmiter(ptable[pid].pagetable, a);
+                memset(pte.kptr(), 0, PAGESIZE);
+                // `size` is either `PAGESIZE` or a smaller value, when less
+                //   than `PAGESIZE` bytes are to-be-copied in `seg.data()`
+                int size = min<int>(seg.data() + seg.data_size() - cursor,
+                                    (long) PAGESIZE);
+                if (is_first_page) {
+                    memcpy((void*) (pte.pa() + seg.va() - a), cursor, size);
+                    is_first_page = false;
+                } else {
+                    memcpy(pte.kptr(), cursor, size);
                 }
+
+                // Iterate cursor
+                cursor += PAGESIZE;
+            }
         }
     }
 
