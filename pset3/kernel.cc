@@ -381,28 +381,31 @@ uintptr_t syscall(regstate* regs) {
 
 int syscall_page_alloc(uintptr_t addr) {
 
+    // Fail with `-2` if `addr` not page-aligned or outside user mem space
     {
-        // Isolate kernel mem from user calls to `syscall_page_alloc`
-        // Fail with `-1' if `addr` not page-aligned or outside user mem space
         bool misaligned, inaccessible;
         misaligned = (addr & PAGEOFFMASK) != 0;
         inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
         if (misaligned || inaccessible) {
-            return -1;
+            return -2;
         }
-    }
-
-    // Handout code does not allow shared user mem
-    assert(physpages[addr / PAGESIZE].refcount == 0);
-    ++physpages[addr / PAGESIZE].refcount;
-    memset((void*) addr, 0, PAGESIZE);
+    }    
 
     // Map allocated page to user pagetable
     {
-        vmiter k_pte = vmiter(kernel_pagetable, addr);
+        void* pa = kalloc(PAGESIZE);
+        // Fail with `-1` if out of mem
+        if (pa == nullptr) {
+            return -1;
+        }
+        uintptr_t pageno = reinterpret_cast<uintptr_t>(pa) / PAGESIZE;
+        // Disallow users-shared pages
+        assert(physpages[pageno].refcount == 1);
+        // Give user access to newly allocated page
         int r = vmiter(ptable[current->pid].pagetable, addr)
-            .try_map(k_pte.pa(), k_pte.perm());
+            .try_map(pa, PTE_P | PTE_W | PTE_U);
         assert(r == 0);
+        memset(pa, 0, PAGESIZE);
     }
 
     return 0;
