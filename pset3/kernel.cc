@@ -68,7 +68,7 @@ void kernel_start(const char* command) {
             perm = 0;
         } else if (addr < PROC_START_ADDR && addr != CONSOLE_ADDR) {
             // kernel memory (except CGA console) is inaccessible to user
-            perm -= PTE_U;
+            perm ^= PTE_U;
         }
         // install identity mapping
         int r = vmiter(kernel_pagetable, addr).try_map(addr, perm);
