@@ -192,7 +192,7 @@ void process_setup(pid_t pid, const char* program_name) {
             // address is currently free.)
             assert(physpages[a / PAGESIZE].refcount == 0);
             ++physpages[a / PAGESIZE].refcount;
-            // Map process memory in user pagetable
+            // Map process code/data in user pagetable
             {
                 vmiter k_pte = vmiter(kernel_pagetable, a);
                 int r = vmiter(ptable[pid].pagetable, a)
@@ -383,19 +383,28 @@ int syscall_page_alloc(uintptr_t addr) {
 
     {
         // Isolate kernel mem from user calls to `syscall_page_alloc`
-        // Fail with `-2' if `addr` not page-aligned or outside user mem space
+        // Fail with `-1' if `addr` not page-aligned or outside user mem space
         bool misaligned, inaccessible;
         misaligned = (addr & PAGEOFFMASK) != 0;
         inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
         if (misaligned || inaccessible) {
-            
-            return -2;
+            return -1;
         }
     }
 
+    // Handout code does not allow shared user mem
     assert(physpages[addr / PAGESIZE].refcount == 0);
     ++physpages[addr / PAGESIZE].refcount;
     memset((void*) addr, 0, PAGESIZE);
+
+    // Map allocated page to user pagetable
+    {
+        vmiter k_pte = vmiter(kernel_pagetable, addr);
+        int r = vmiter(ptable[current->pid].pagetable, addr)
+            .try_map(k_pte.pa(), k_pte.perm());
+        assert(r == 0);
+    }
+
     return 0;
 }
 
