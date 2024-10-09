@@ -445,8 +445,16 @@ int syscall_page_alloc(uintptr_t addr) {
 }
 
 
-// syscall_fork(regs)
-//    Does **something**
+// syscall_fork
+//    Forks current process into parent and child.
+//    Copies all of parent's mem into child's mem, but any writeable mem is
+//    mapped to a different phys addr in the child pagetable, for process iso.
+//    On failed fork, the partially created child will be cleaned up.
+//    Returns:
+//      Success: `pid` to parent process, where `pid` is the child's PID
+//                 `0` to child process
+//      Error:    `-1` when there are no process slots to fork the child into
+//                `-2` when out of mem for child's init, has done a cleanup
 
 pid_t syscall_fork() {
 
