@@ -439,7 +439,7 @@ int syscall_page_alloc(uintptr_t addr) {
         // Disallow users-shared pages
         assert(physpages[pageno].refcount == 1);
         // Give user access to newly allocated page
-        int r = vmiter(ptable[current->pid].pagetable, addr)
+        int r = vmiter(current->pagetable, addr)
             .try_map(kptr, PTE_P | PTE_W | PTE_U);
         assert(r == 0);
         memset(kptr, 0, PAGESIZE);
