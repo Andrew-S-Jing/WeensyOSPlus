@@ -478,11 +478,13 @@ pid_t syscall_fork() {
     for (uintptr_t a = PAGESIZE; a < MEMSIZE_VIRTUAL; a += PAGESIZE) {
         vmiter pte = vmiter(ptable[current->pid].pagetable, a);
         vmiter pte_ = vmiter(ptable[pid].pagetable, a);
-        if (a < PROC_START_ADDR) {
-            // Map kernel mem to same phys addr
+        unsigned long read_only = PTE_P | PTE_U;
+        unsigned long writeable = PTE_P | PTE_W | PTE_U;
+        if (a < PROC_START_ADDR || (pte.perm() & writeable) == read_only) {
+            // Map kernel and read-only mem to same phys addr
             int r = pte_.try_map(pte.pa(), pte.perm());
             assert (r == 0);
-        } else if (pte.perm() >= (PTE_W | PTE_U)) {
+        } else if ((pte.perm() & writeable) == writeable) {
             // Map writeable mem to newly alloc'd phys addr
             void* pa_ = kalloc(PAGESIZE);
             // Fail on `-2` when out of mem to fork current proc
@@ -496,10 +498,6 @@ pid_t syscall_fork() {
             }
             pte_.map(pa_, pte.perm());
             memcpy(pa_, pte.kptr(), PAGESIZE);
-        } else if (pte.perm() >= PTE_U) {
-            // Map read-only mem to same phys addr
-            int r = pte_.try_map(pte.pa(), pte.perm());
-            assert (r == 0);
         }
     }
 
