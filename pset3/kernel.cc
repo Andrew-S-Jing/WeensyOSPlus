@@ -479,20 +479,19 @@ pid_t syscall_fork() {
     ptable[pid].state = P_RUNNABLE;
 
     // Copy kernel mem mappings into new pagetable
-    for (uintptr_t a = PAGESIZE; a < MEMSIZE_VIRTUAL; a += PAGESIZE) {
-        vmiter pte = vmiter(current->pagetable, a);
-        vmiter pte_ = vmiter(ptable[pid].pagetable, a);
-        unsigned long read_only = PTE_P | PTE_U;
-        unsigned long writeable = PTE_P | PTE_W | PTE_U;
-        if (a < PROC_START_ADDR || (pte.perm() & writeable) == read_only) {
+    for (vmiter it = vmiter(current->pagetable, 0);
+             !it.done();
+             it.next()) {
+        vmiter pte = vmiter(ptable[pid].pagetable, it.va());
+        if (it.va() < PROC_START_ADDR || (it.user() && !it.writable())) {
             // Map kernel and read-only mem to same phys addr
-            int r = pte_.try_map(pte.pa(), pte.perm());
+            int r = pte.try_map(it.pa(), it.perm());
             assert (r == 0);
-        } else if ((pte.perm() & writeable) == writeable) {
+        } else if (it.user() && it.writable()) {
             // Map writeable mem to newly alloc'd phys addr
-            void* pa_ = kalloc(PAGESIZE);
+            void* pa = kalloc(PAGESIZE);
             // Fail on `-2` when out of mem to fork current proc
-            if (!pa_) {
+            if (!pa) {
                 // Simple cleanup
                 // TODO: Step 7 additional cleanup
                 ptable[pid].pagetable = nullptr;
@@ -500,8 +499,8 @@ pid_t syscall_fork() {
                 ptable[pid].state = P_FREE;
                 return -2;
             }
-            pte_.map(pa_, pte.perm());
-            memcpy(pa_, pte.kptr(), PAGESIZE);
+            pte.map(pa, it.perm());
+            memcpy(pa, it.kptr(), PAGESIZE);
         }
     }
 
