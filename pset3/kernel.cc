@@ -339,7 +339,7 @@ void exception(regstate* regs) {
 
 // These functions are defined farther below
 int syscall_page_alloc(uintptr_t addr);
-int syscall_fork(regstate regs);
+pid_t syscall_fork();
 
 
 // syscall(regs)
@@ -394,7 +394,7 @@ uintptr_t syscall(regstate* regs) {
         return syscall_page_alloc(current->regs.reg_rdi);
 
     case SYSCALL_FORK:
-        return syscall_fork(current->regs);
+        return syscall_fork();
 
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
@@ -448,7 +448,7 @@ int syscall_page_alloc(uintptr_t addr) {
 // syscall_fork(regs)
 //    Does **something**
 
-int syscall_fork(regstate regs) {
+pid_t syscall_fork() {
 
     // Find next free PID
     pid_t pid = 0;
@@ -463,14 +463,33 @@ int syscall_fork(regstate regs) {
 
     // Create child
     ptable[pid].pagetable = kalloc_pagetable();
-    memcpy(ptable[pid].pagetable, ptable[current->pid].pagetable, sizeof(x86_64_pagetable));
+    ptable[pid].pid = pid;
+    ptable[pid].regs = current->regs;
+    ptable[pid].state = P_RUNNABLE;
+
     // Copy kernel mem mappings into new pagetable
+    for (uintptr_t a = PAGESIZE; a < MEMSIZE_VIRTUAL; a += PAGESIZE) {
+        vmiter pte = vmiter(ptable[current->pid].pagetable, a);
+        vmiter pte_ = vmiter(ptable[pid].pagetable, a);
+        if (a < PROC_START_ADDR) {
+            int r = pte_.try_map(pte.pa(), pte.perm());
+            assert (r == 0);
+        } else if (pte.perm() >= (PTE_W | PTE_U)) {
+            void* pa_ = kalloc(PAGESIZE);
+            if (!pa_) {
+                // TODO: Simulacrum of a cleanup
+                ptable[pid].state = P_FREE;
+                return -2;
+            }
+            pte_.map(pa_, pte.perm());
+            memcpy(pa_, pte.kptr(), PAGESIZE);
+        }
+    }
+
+    // TODO: Cleanup on fail
     
-
-
-    // Cleanup on fail
-
-    return 0;
+    ptable[pid].regs.reg_rax = 0;
+    return pid;
 }
 
 
