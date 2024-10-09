@@ -463,7 +463,6 @@ pid_t syscall_fork() {
 
     // Create child
     ptable[pid].pagetable = kalloc_pagetable();
-    ptable[pid].pid = pid;
     ptable[pid].regs = current->regs;
     ptable[pid].state = P_RUNNABLE;
 
@@ -476,8 +475,12 @@ pid_t syscall_fork() {
             assert (r == 0);
         } else if (pte.perm() >= (PTE_W | PTE_U)) {
             void* pa_ = kalloc(PAGESIZE);
+            // Fail on `-2` when out of mem to fork current proc
             if (!pa_) {
-                // TODO: Simulacrum of a cleanup
+                // Simple cleanup
+                // TODO: Step 7 additional cleanup
+                ptable[pid].pagetable = nullptr;
+                memset(&ptable[pid].regs, 0, sizeof(regstate));
                 ptable[pid].state = P_FREE;
                 return -2;
             }
@@ -486,8 +489,6 @@ pid_t syscall_fork() {
         }
     }
 
-    // TODO: Cleanup on fail
-    
     ptable[pid].regs.reg_rax = 0;
     return pid;
 }
