@@ -155,8 +155,14 @@ void* kalloc(size_t sz) {
 //    If `kptr == nullptr` does nothing.
 
 void kfree(void* kptr) {
-    (void) kptr;
-    assert(false /* your code here */);
+    if (!kptr) return;
+    for (ptiter it(kernel_pagetable); it.va() < MEMSIZE_VIRTUAL; it.next()) {
+        if (it.kptr() == kptr && physpages[it.pa()].used()) {
+            physpages[it.pa()].refcount--;
+            return;
+        }
+    }
+    assert(false);
 }
 
 
@@ -478,6 +484,8 @@ pid_t syscall_fork() {
     ptable[pid].regs = current->regs;
     ptable[pid].state = P_RUNNABLE;
 
+    unsigned long read_only = PTE_P | PTE_U;
+    unsigned long writeable = PTE_P | PTE_W | PTE_U;
     // Copy kernel mem mappings into new pagetable
     for (vmiter it = vmiter(current->pagetable, 0);
              !it.done();
@@ -513,7 +521,10 @@ pid_t syscall_fork() {
 //    does **something**
 
 void syscall_exit() {
-    return;
+    current->pagetable = nullptr;
+    memset(&current->regs, 0, sizeof(regstate));
+    current->state = P_FREE;
+    schedule();
 }
 
 
