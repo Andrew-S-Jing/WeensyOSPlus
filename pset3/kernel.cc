@@ -340,6 +340,7 @@ void exception(regstate* regs) {
 // These functions are defined farther below
 int syscall_page_alloc(uintptr_t addr);
 pid_t syscall_fork();
+void syscall_exit();
 
 
 // syscall(regs)
@@ -395,6 +396,9 @@ uintptr_t syscall(regstate* regs) {
 
     case SYSCALL_FORK:
         return syscall_fork();
+
+    case SYSCALL_EXIT:
+        syscall_exit();
 
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
@@ -503,6 +507,14 @@ pid_t syscall_fork() {
 
     ptable[pid].regs.reg_rax = 0;
     return pid;
+}
+
+
+// syscall_exit
+//    does **something**
+
+void syscall_exit() {
+    return;
 }
 
 
