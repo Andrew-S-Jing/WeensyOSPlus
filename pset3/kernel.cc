@@ -38,6 +38,7 @@ physpageinfo physpages[NPAGES];
 
 [[noreturn]] void schedule();
 [[noreturn]] void run(proc* p);
+[[noreturn]] void syscall_exit();
 void exception(regstate* regs);
 uintptr_t syscall(regstate* regs);
 void memshow();
@@ -484,8 +485,6 @@ pid_t syscall_fork() {
     ptable[pid].regs = current->regs;
     ptable[pid].state = P_RUNNABLE;
 
-    unsigned long read_only = PTE_P | PTE_U;
-    unsigned long writeable = PTE_P | PTE_W | PTE_U;
     // Copy kernel mem mappings into new pagetable
     for (vmiter it = vmiter(current->pagetable, 0);
              !it.done();
