@@ -480,7 +480,7 @@ pid_t syscall_fork() {
 
     // Copy kernel mem mappings into new pagetable
     for (uintptr_t a = PAGESIZE; a < MEMSIZE_VIRTUAL; a += PAGESIZE) {
-        vmiter pte = vmiter(ptable[current->pid].pagetable, a);
+        vmiter pte = vmiter(current->pagetable, a);
         vmiter pte_ = vmiter(ptable[pid].pagetable, a);
         unsigned long read_only = PTE_P | PTE_U;
         unsigned long writeable = PTE_P | PTE_W | PTE_U;
