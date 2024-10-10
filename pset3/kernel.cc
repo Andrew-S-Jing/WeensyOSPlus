@@ -192,22 +192,26 @@ void kcleanup(pid_t pid) {
 }
 
 
-// process_setup_page_alloc(pid, va)
+// kpage_alloc(pid, va)
 //    Allocates a currently free page in phys mem and maps that address to `va`
-//    in the pagetable for process `pid`. Gives process permissions in allocated
-//    page.
-//    Assumes there is enough phys mem to initialize all processes.
+//    in the pagetable for process `pid`. Gives permissions in allocated page.
+//
+//    Returns:
+//      Success: returns  `0`
+//      Errors:  returns `-1` on failed mem page allocation
+//               returns `-2` on failed pagetable page allocation
 
-void process_setup_page_alloc(pid_t pid, uintptr_t va) {
+int kpage_alloc(pid_t pid, uintptr_t va) {
     void* kptr = kalloc(PAGESIZE);
-    assert(kptr);
+    if (!kptr) return -1;
     uintptr_t pageno = reinterpret_cast<uintptr_t>(kptr) / PAGESIZE;
     // Disallow users-shared pages in process mem
     assert(physpages[pageno].refcount == 1);
     // Give user access to newly allocated page
     int r = vmiter(ptable[pid].pagetable, va)
         .try_map(kptr, PTE_P | PTE_W | PTE_U);
-    assert(r == 0);
+    if (r != 0) return -2;
+    return 0;
 }
 
 
@@ -215,6 +219,8 @@ void process_setup_page_alloc(pid_t pid, uintptr_t va) {
 //    Load application program `program_name` as process number `pid`.
 //    This loads the application's code and data into memory, sets its
 //    %rip and %rsp, gives it a stack page, and marks it as runnable.
+//
+//    **Assumes there is enough mem to initialize the process**
 
 void process_setup(pid_t pid, const char* program_name) {
     init_process(&ptable[pid], 0);
@@ -249,7 +255,8 @@ void process_setup(pid_t pid, const char* program_name) {
                  a += PAGESIZE) {
             
             // Allocate and map
-            process_setup_page_alloc(pid, a);
+            int r = kpage_alloc(pid, a);
+            assert (r == 0);
 
             // Copy code/data
             {
@@ -283,7 +290,9 @@ void process_setup(pid_t pid, const char* program_name) {
         uintptr_t va_last = MEMSIZE_VIRTUAL - 1;
         uintptr_t stack_addr = (va_last) - (va_last & PAGEOFFMASK);
         ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
-        process_setup_page_alloc(pid, stack_addr);
+        
+        int r = kpage_alloc(pid, stack_addr);
+        assert(r == 0);
     }
 
     // mark process as runnable
@@ -445,37 +454,31 @@ uintptr_t syscall(regstate* regs) {
 // syscall_page_alloc(addr)
 //    Handles the SYSCALL_PAGE_ALLOC system call. Implements the specification
 //    for `sys_page_alloc` in `u-lib.hh`.
+//
 //    Returns:
-//      Success: returns  0
-//      Errors:  returns -1 on out-of-mem error
-//               returns -2 on misaligned page addr
-//               returns -3 on permission denied
+//      Success: returns  `0`
+//      Errors:  returns `-1` on failed mem page allocation
+//               returns `-2` on failed pagetable page allocation
+//               returns `-3` on permission denied to kernel virt memspace
+//               returns `-4` on misaligned addr
 
 int syscall_page_alloc(uintptr_t addr) {
 
-    // Fail with `-2` if `addr` not page-aligned, `-3` if outside user mem space
+    // Fail on misaligned or kernel memspace virt addr
     {
         bool misaligned, inaccessible;
-        misaligned = (addr & PAGEOFFMASK) != 0;
         inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
-        if (misaligned) return -2;
+        misaligned = (addr & PAGEOFFMASK) != 0;
         if (inaccessible) return -3;
+        if (misaligned) return -4;
     }    
 
     // Map allocated page to user pagetable
-    {
-        void* kptr = kalloc(PAGESIZE);
-        // Fail with `-1` if out of mem
-        if (!kptr) return -1;
-        int pageno = reinterpret_cast<uintptr_t>(kptr) / PAGESIZE;
-        // Disallow users-shared pages
-        assert(physpages[pageno].refcount == 1);
-        // Give user access to newly allocated page
-        int r = vmiter(current->pagetable, addr)
-            .try_map(kptr, PTE_P | PTE_W | PTE_U);
-        assert(r == 0);
-        memset(kptr, 0, PAGESIZE);
-    }
+    int r = kpage_alloc(current->pid, addr);
+    if (r != 0) return r;
+    void* kptr = vmiter(current->pagetable, addr).kptr();
+    assert(kptr);
+    memset(kptr, 0, PAGESIZE);
 
     return 0;
 }
@@ -486,12 +489,13 @@ int syscall_page_alloc(uintptr_t addr) {
 //    Copies all of parent's mem into child's mem, but any writeable mem is
 //    mapped to a different phys addr in the child pagetable, for process iso.
 //    On failed fork, the partially created child will be cleaned up.
+//
 //    Returns:
 //      Success: `pid` to parent process, where `pid` is the child's PID
 //                 `0` to child process
-//      Error:    `-1` when there are no process slots to fork the child into
-//                `-2` when out of mem for child's init, has done a cleanup
-//                `-3` when out of mem for child's pagetable, has done a cleanup
+//      Error:    `-1` on failed mem page allocation for child
+//                `-2` on failed pagetable page allocation for child
+//                `-3` on failed PID/process slot allocation
 
 pid_t syscall_fork() {
 
@@ -503,8 +507,8 @@ pid_t syscall_fork() {
             break;
         }
     }
-    // Fail on `-1` when there are no free PIDs
-    if (pid == 0) return -1;
+    // Fail on `-3` when there are no free PIDs
+    if (pid == 0) return -3;
 
     // Create child
     ptable[pid].pagetable = kalloc_pagetable();
@@ -520,7 +524,7 @@ pid_t syscall_fork() {
             int r = pte.try_map(it.pa(), it.perm());
             if (r != 0) {
                 kcleanup(pid);
-                return -3;
+                return -2;
             }
             if (it.user()) physpages[it.pa() / PAGESIZE].refcount++;
         } else if (it.user() && it.writable()) {
@@ -528,13 +532,13 @@ pid_t syscall_fork() {
             void* pa = kalloc(PAGESIZE);
             if (!pa) {
                 kcleanup(pid);
-                return -2;
+                return -1;
             }
             int r = pte.try_map(pa, it.perm());
             if (r != 0) {
                 kfree(pa);
                 kcleanup(pid);
-                return -3;
+                return -2;
             }
             memcpy(pa, it.kptr(), PAGESIZE);
         }
