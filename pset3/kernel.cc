@@ -121,7 +121,7 @@ void kernel_start(const char* command) {
 void* kalloc(size_t sz) {
     if (sz > PAGESIZE) return nullptr;
 
-    static int pageno = 0;
+    int pageno = rand(0, NPAGES - 1);
     int page_increment = 1;
     // In the handout code, `kalloc` returns the first free page.
     // Alternate search strategies can be faster and/or expose bugs elsewhere.
