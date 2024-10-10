@@ -202,12 +202,10 @@ void kcleanup(pid_t pid) {
 //               returns `-2` on failed pagetable page allocation
 
 int kpage_alloc(pid_t pid, uintptr_t va) {
+    // Allocate page
     void* kptr = kalloc(PAGESIZE);
     if (!kptr) return -1;
-    uintptr_t pageno = reinterpret_cast<uintptr_t>(kptr) / PAGESIZE;
-    // Disallow users-shared pages in process mem
-    assert(physpages[pageno].refcount == 1);
-    // Give user access to newly allocated page
+    // Map and user-permit the newly allocated page
     int r = vmiter(ptable[pid].pagetable, va)
         .try_map(kptr, PTE_P | PTE_W | PTE_U);
     if (r != 0) return -2;
@@ -259,41 +257,37 @@ void process_setup(pid_t pid, const char* program_name) {
             assert (r == 0);
 
             // Copy code/data
-            {
-                vmiter pte = vmiter(ptable[pid].pagetable, a);
-                memset(pte.kptr(), 0, PAGESIZE);
-                // `size` is the # of bytes to be copied on this page and is
-                //   equal to either `PAGESIZE` or a smaller value, when fewer
-                //   than `PAGESIZE` bytes are to-be-copied in `seg.data()` or
-                //   the first `offset` bytes of 1st-page are before `seg.va()`
-                int size = min(remaining, (int) PAGESIZE);
-                if (is_first_page) {
-                    uintptr_t offset = seg.va() - a;
-                    size -= offset;
-                    memcpy((void*) (pte.pa() + offset), cursor, size);
-                    is_first_page = false;
-                }
-                else memcpy(pte.kptr(), cursor, size);
-                // Iterate vars
-                cursor += PAGESIZE;
-                remaining -= size;
+            vmiter pte = vmiter(ptable[pid].pagetable, a);
+            memset(pte.kptr(), 0, PAGESIZE);
+            // `size` (below) is the # of bytes to be copied on this page and
+            //   is equal to either `PAGESIZE` or a smaller value, when fewer
+            //   than `PAGESIZE` bytes are to-be-copied in `seg.data()` or
+            //   the first `offset` bytes of 1st-page are before `seg.va()`
+            int size = min(remaining, (int) PAGESIZE);
+            if (is_first_page) {
+                uintptr_t offset = seg.va() - a;
+                size -= offset;
+                memcpy((void*) (pte.pa() + offset), cursor, size);
+                is_first_page = false;
             }
+            else memcpy(pte.kptr(), cursor, size);
+
+            // Iterate vars
+            cursor += PAGESIZE;
+            remaining -= size;
         }
     }
 
     // mark entry point
     ptable[pid].regs.reg_rip = pgm.entry();
 
+    // Compute process virtual address for stack page
+    uintptr_t va_last = MEMSIZE_VIRTUAL - 1;
+    uintptr_t stack_addr = (va_last) - (va_last & PAGEOFFMASK);
+    ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
     // allocate and map stack segment
-    {
-        // Compute process virtual address for stack page
-        uintptr_t va_last = MEMSIZE_VIRTUAL - 1;
-        uintptr_t stack_addr = (va_last) - (va_last & PAGEOFFMASK);
-        ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
-        
-        int r = kpage_alloc(pid, stack_addr);
-        assert(r == 0);
-    }
+    int r = kpage_alloc(pid, stack_addr);
+    assert(r == 0);
 
     // mark process as runnable
     ptable[pid].state = P_RUNNABLE;
@@ -465,13 +459,11 @@ uintptr_t syscall(regstate* regs) {
 int syscall_page_alloc(uintptr_t addr) {
 
     // Fail on misaligned or kernel memspace virt addr
-    {
-        bool misaligned, inaccessible;
-        inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
-        misaligned = (addr & PAGEOFFMASK) != 0;
-        if (inaccessible) return -3;
-        if (misaligned) return -4;
-    }    
+    bool misaligned, inaccessible;
+    inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
+    misaligned = (addr & PAGEOFFMASK) != 0;
+    if (inaccessible) return -3;
+    if (misaligned) return -4;
 
     // Map allocated page to user pagetable
     int r = kpage_alloc(current->pid, addr);
