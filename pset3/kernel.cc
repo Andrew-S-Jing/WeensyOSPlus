@@ -119,9 +119,7 @@ void kernel_start(const char* command) {
 //    Unhandled exception 3!` This may help you debug.
 
 void* kalloc(size_t sz) {
-    if (sz > PAGESIZE) {
-        return nullptr;
-    }
+    if (sz > PAGESIZE) return nullptr;
 
     static int pageno = 0;
     int page_increment = 1;
@@ -166,22 +164,27 @@ void kfree(void* kptr) {
 
 
 // kfree_pagetable(pt)
-//    does **something**
+//    Frees all virt addrs referred to in the pagetable at `pt`, then
+//    frees all level 1-3 pagetable pages in the pagetable, then
+//    frees the top-level (root) pagetable page at `pt`.
+//    Does nothing if the pagetable does not exist (`pt` == `nullptr`).
 
 void kfree_pagetable(x86_64_pagetable* pt) {
     if (!pt) return;
-    for (vmiter it(pt, 0); !it.done(); it.next()) {
+    for (vmiter it(pt, 0); !it.done(); it.next())
         if (it.user()) kfree(it.kptr());
-    }
     for (ptiter it(pt); !it.done(); it.next()) kfree(it.kptr());
     kfree(pt);
 }
 
 
-// kexit(pid)
-//    does **something**
+// kcleanup(pid)
+//    Frees and cleans all data (except shared pages) associated with the
+//    process with PID `pid`. Does not schedule the next process.
+//    Useful as a "kill-this-process" cleanup function during `syscall_fork()`
+//    and during a `SYSCALL_EXIT` exception in `syscall()`.
 
-void kexit(pid_t pid) {
+void kcleanup(pid_t pid) {
     kfree_pagetable(ptable[pid].pagetable);
     ptable[pid].pagetable = nullptr;
     memset(&ptable[pid].regs, 0, sizeof(regstate));
@@ -369,7 +372,6 @@ void exception(regstate* regs) {
 // These functions are defined farther below
 int syscall_page_alloc(uintptr_t addr);
 pid_t syscall_fork();
-void syscall_exit();
 
 
 // syscall(regs)
@@ -427,7 +429,8 @@ uintptr_t syscall(regstate* regs) {
         return syscall_fork();
 
     case SYSCALL_EXIT:
-        syscall_exit();
+        kcleanup(current->pid);
+        schedule();             // does not return
 
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
@@ -516,7 +519,7 @@ pid_t syscall_fork() {
             // Map kernel and read-only mem to same phys addr
             int r = pte.try_map(it.pa(), it.perm());
             if (r != 0) {
-                kexit(pid);
+                kcleanup(pid);
                 return -3;
             }
             if (it.user()) physpages[it.pa() / PAGESIZE].refcount++;
@@ -524,13 +527,13 @@ pid_t syscall_fork() {
             // Map writeable mem to newly alloc'd phys addr
             void* pa = kalloc(PAGESIZE);
             if (!pa) {
-                kexit(pid);
+                kcleanup(pid);
                 return -2;
             }
             int r = pte.try_map(pa, it.perm());
             if (r != 0) {
                 kfree(pa);
-                kexit(pid);
+                kcleanup(pid);
                 return -3;
             }
             memcpy(pa, it.kptr(), PAGESIZE);
@@ -539,15 +542,6 @@ pid_t syscall_fork() {
 
     ptable[pid].regs.reg_rax = 0;
     return pid;
-}
-
-
-// syscall_exit
-//    does **something**
-
-void syscall_exit() {
-    kexit(current->pid);
-    schedule();
 }
 
 
