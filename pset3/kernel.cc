@@ -157,11 +157,11 @@ void* kalloc(size_t sz) {
 
 void kfree(void* kptr) {
     if (!kptr) return;
-    int pageno = reinterpret_cast<uintptr_t>(kptr) / PAGESIZE;
-    if (physpages[pageno].used()) {
-        physpages[pageno].refcount--;
-        return;
-    }
+    uintptr_t pa = reinterpret_cast<uintptr_t>(kptr);
+    assert((pa & PAGEOFFBITS) == 0);
+    int pageno = pa / PAGESIZE;
+    assert(physpages[pageno].used());
+    physpages[pageno].refcount--;
 }
 
 
