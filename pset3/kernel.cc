@@ -157,13 +157,35 @@ void* kalloc(size_t sz) {
 
 void kfree(void* kptr) {
     if (!kptr) return;
-    for (ptiter it(kernel_pagetable); it.va() < MEMSIZE_VIRTUAL; it.next()) {
-        if (it.kptr() == kptr && physpages[it.pa()].used()) {
-            physpages[it.pa()].refcount--;
-            return;
-        }
+    int pageno = reinterpret_cast<uintptr_t>(kptr) / PAGESIZE;
+    if (physpages[pageno].used()) {
+        physpages[pageno].refcount--;
+        return;
     }
-    assert(false);
+}
+
+
+// kfree_pagetable(pt)
+//    does **something**
+
+void kfree_pagetable(x86_64_pagetable* pt) {
+    if (!pt) return;
+    for (vmiter it(pt, 0); !it.done(); it.next()) {
+        if (it.user()) kfree(it.kptr());
+    }
+    for (ptiter it(pt); !it.done(); it.next()) kfree(it.kptr());
+    kfree(pt);
+}
+
+
+// kexit(pid)
+//    does **something**
+
+void kexit(pid_t pid) {
+    kfree_pagetable(ptable[pid].pagetable);
+    ptable[pid].pagetable = nullptr;
+    memset(&ptable[pid].regs, 0, sizeof(regstate));
+    ptable[pid].state = P_FREE;
 }
 
 
@@ -466,6 +488,7 @@ int syscall_page_alloc(uintptr_t addr) {
 //                 `0` to child process
 //      Error:    `-1` when there are no process slots to fork the child into
 //                `-2` when out of mem for child's init, has done a cleanup
+//                `-3` when out of mem for child's pagetable, has done a cleanup
 
 pid_t syscall_fork() {
 
@@ -482,31 +505,34 @@ pid_t syscall_fork() {
 
     // Create child
     ptable[pid].pagetable = kalloc_pagetable();
+    if (!ptable[pid].pagetable) return -2;
     ptable[pid].regs = current->regs;
     ptable[pid].state = P_RUNNABLE;
 
     // Copy kernel mem mappings into new pagetable
-    for (vmiter it = vmiter(current->pagetable, 0);
-             !it.done();
-             it.next()) {
+    for (vmiter it = vmiter(current->pagetable, 0); !it.done(); it.next()) {
         vmiter pte = vmiter(ptable[pid].pagetable, it.va());
         if (it.va() < PROC_START_ADDR || (it.user() && !it.writable())) {
             // Map kernel and read-only mem to same phys addr
             int r = pte.try_map(it.pa(), it.perm());
-            assert (r == 0);
+            if (r != 0) {
+                kexit(pid);
+                return -3;
+            }
+            if (it.user()) physpages[it.pa() / PAGESIZE].refcount++;
         } else if (it.user() && it.writable()) {
             // Map writeable mem to newly alloc'd phys addr
             void* pa = kalloc(PAGESIZE);
-            // Fail on `-2` when out of mem to fork current proc
             if (!pa) {
-                // Simple cleanup
-                // TODO: Step 7 additional cleanup
-                ptable[pid].pagetable = nullptr;
-                memset(&ptable[pid].regs, 0, sizeof(regstate));
-                ptable[pid].state = P_FREE;
+                kexit(pid);
                 return -2;
             }
-            pte.map(pa, it.perm());
+            int r = pte.try_map(pa, it.perm());
+            if (r != 0) {
+                kfree(pa);
+                kexit(pid);
+                return -3;
+            }
             memcpy(pa, it.kptr(), PAGESIZE);
         }
     }
@@ -520,9 +546,7 @@ pid_t syscall_fork() {
 //    does **something**
 
 void syscall_exit() {
-    current->pagetable = nullptr;
-    memset(&current->regs, 0, sizeof(regstate));
-    current->state = P_FREE;
+    kexit(current->pid);
     schedule();
 }
 
