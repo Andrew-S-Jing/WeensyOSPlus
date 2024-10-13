@@ -3,7 +3,7 @@
 #include "k-vmiter.hh"
 #include "obj/k-firstprocess.h"
 #include <atomic>
-
+ 
 // kernel.cc
 //
 //    This is the kernel.
