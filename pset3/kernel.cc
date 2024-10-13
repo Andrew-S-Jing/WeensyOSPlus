@@ -82,12 +82,9 @@ void kernel_start(const char* command) {
         ptable[i].pid = i;
         ptable[i].state = P_FREE;
     }
-    if (!command) {
-        command = WEENSYOS_FIRST_PROCESS;
-    }
-    if (!program_image(command).empty()) {
-        process_setup(1, command);
-    } else {
+    if (!command) command = WEENSYOS_FIRST_PROCESS;
+    if (!program_image(command).empty()) process_setup(1, command);
+    else {
         process_setup(1, "allocator");
         process_setup(2, "allocator2");
         process_setup(3, "allocator3");
@@ -206,8 +203,7 @@ int kpage_alloc(pid_t pid, uintptr_t va, int perm) {
     void* kptr = kalloc(PAGESIZE);
     if (!kptr) return -1;
     // Map and user-permit the newly allocated page
-    int r = vmiter(ptable[pid].pagetable, va)
-        .try_map(kptr, perm);
+    int r = vmiter(ptable[pid].pagetable, va).try_map(kptr, perm);
     if (r != 0) return -2;
     return 0;
 }
@@ -253,8 +249,7 @@ void process_setup(pid_t pid, const char* program_name) {
                  a += PAGESIZE) {
             
             // Allocate and map
-            int perm = PTE_P | PTE_U;
-            if (seg.writable()) perm |= PTE_W;
+            int perm = seg.writable() ? PTE_P | PTE_W | PTE_U : PTE_P | PTE_U;
             int r = kpage_alloc(pid, a, perm);
             assert (r == 0);
 
@@ -271,8 +266,7 @@ void process_setup(pid_t pid, const char* program_name) {
                 size -= offset;
                 memcpy((void*) (pte.pa() + offset), cursor, size);
                 is_first_page = false;
-            }
-            else memcpy(pte.kptr(), cursor, size);
+            } else memcpy(pte.kptr(), cursor, size);
 
             // Iterate vars
             cursor += PAGESIZE;
@@ -321,9 +315,7 @@ void exception(regstate* regs) {
     // Show the current cursor location and memory state
     // (unless this is a kernel fault).
     console_show_cursor(cursorpos);
-    if (regs->reg_intno != INT_PF || (regs->reg_errcode & PTE_U)) {
-        memshow();
-    }
+    if (regs->reg_intno != INT_PF || (regs->reg_errcode & PTE_U)) memshow();
 
     // If Control-C was typed, exit the virtual machine.
     check_keyboard();
@@ -366,11 +358,8 @@ void exception(regstate* regs) {
 
 
     // Return to the current process (or run something else).
-    if (current->state == P_RUNNABLE) {
-        run(current);
-    } else {
-        schedule();
-    }
+    if (current->state == P_RUNNABLE) run(current);
+    else schedule();
 }
 
 
@@ -480,7 +469,7 @@ int syscall_page_alloc(uintptr_t addr) {
 
 // syscall_fork
 //    Forks current process into parent and child.
-//    Copies all of parent's mem into child's mem, but any writeable mem is
+//    Copies all of parent's mem into child's mem, but any writable mem is
 //    mapped to a different phys addr in the child pagetable, for process iso.
 //    On failed fork, the partially created child will be cleaned up.
 //
@@ -522,7 +511,7 @@ pid_t syscall_fork() {
             }
             if (it.user()) physpages[it.pa() / PAGESIZE].refcount++;
         } else if (it.user() && it.writable()) {
-            // Map writeable mem to newly alloc'd phys addr
+            // Map writable mem to newly alloc'd phys addr
             void* pa = kalloc(PAGESIZE);
             if (!pa) {
                 kcleanup(pid);
@@ -538,7 +527,9 @@ pid_t syscall_fork() {
         }
     }
 
+    // Return `0` to child proc
     ptable[pid].regs.reg_rax = 0;
+    // Return `pid` to parent proc
     return pid;
 }
 
@@ -551,17 +542,13 @@ void schedule() {
     pid_t pid = current->pid;
     for (unsigned spins = 1; true; ++spins) {
         pid = (pid + 1) % PID_MAX;
-        if (ptable[pid].state == P_RUNNABLE) {
-            run(&ptable[pid]);
-        }
+        if (ptable[pid].state == P_RUNNABLE) run(&ptable[pid]);
 
         // If Control-C was typed, exit the virtual machine.
         check_keyboard();
 
         // If spinning forever, show the memviewer.
-        if (spins % (1 << 12) == 0) {
-            memshow();
-        }
+        if (spins % (1 << 12) == 0) memshow();
     }
 }
 
@@ -585,8 +572,7 @@ void run(proc* p) {
     exception_return(p);
 
     // should never get here
-    while (true) {
-    }
+    while (true);
 }
 
 
@@ -610,9 +596,7 @@ void memshow() {
         if (ptable[showing].state != P_FREE
             && ptable[showing].pagetable) {
             p = &ptable[showing];
-        } else {
-            showing = (showing + 1) % PID_MAX;
-        }
+        } else showing = (showing + 1) % PID_MAX;
     }
 
     console_memviewer(p);
