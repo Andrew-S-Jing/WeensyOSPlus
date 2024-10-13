@@ -201,13 +201,13 @@ void kcleanup(pid_t pid) {
 //      Errors:  returns `-1` on failed mem page allocation
 //               returns `-2` on failed pagetable page allocation
 
-int kpage_alloc(pid_t pid, uintptr_t va) {
+int kpage_alloc(pid_t pid, uintptr_t va, int perm) {
     // Allocate page
     void* kptr = kalloc(PAGESIZE);
     if (!kptr) return -1;
     // Map and user-permit the newly allocated page
     int r = vmiter(ptable[pid].pagetable, va)
-        .try_map(kptr, PTE_P | PTE_W | PTE_U);
+        .try_map(kptr, perm);
     if (r != 0) return -2;
     return 0;
 }
@@ -253,7 +253,9 @@ void process_setup(pid_t pid, const char* program_name) {
                  a += PAGESIZE) {
             
             // Allocate and map
-            int r = kpage_alloc(pid, a);
+            int perm = PTE_P | PTE_U;
+            if (seg.writable()) perm |= PTE_W;
+            int r = kpage_alloc(pid, a, perm);
             assert (r == 0);
 
             // Copy code/data
@@ -286,7 +288,7 @@ void process_setup(pid_t pid, const char* program_name) {
     uintptr_t stack_addr = (va_last) - (va_last & PAGEOFFMASK);
     ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
     // allocate and map stack segment
-    int r = kpage_alloc(pid, stack_addr);
+    int r = kpage_alloc(pid, stack_addr, PTE_P | PTE_W | PTE_U);
     assert(r == 0);
 
     // mark process as runnable
@@ -466,7 +468,7 @@ int syscall_page_alloc(uintptr_t addr) {
     if (misaligned) return -4;
 
     // Map allocated page to user pagetable
-    int r = kpage_alloc(current->pid, addr);
+    int r = kpage_alloc(current->pid, addr, PTE_P | PTE_W | PTE_U);
     if (r != 0) return r;
     void* kptr = vmiter(current->pagetable, addr).kptr();
     assert(kptr);
