@@ -26,7 +26,7 @@
 #define PTE_PCU (PTE_P | PTE_COW | PTE_U)
 #define NEWPAGE_PAGENO 1        // page number of universal newpage
 #define NEWPAGE_ADDR (NEWPAGE_PAGENO * PAGESIZE)
-    // universal newpage under copy-on-write model
+                                // universal newpage under copy-on-write model
 
 #define PROC_SIZE 0x40000       // initial state only
 
