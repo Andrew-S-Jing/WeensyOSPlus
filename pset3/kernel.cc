@@ -63,7 +63,7 @@ void kernel_start(const char* command) {
 
     // (re-)initialize kernel page table
     for (uintptr_t addr = 0; addr < MEMSIZE_PHYSICAL; addr += PAGESIZE) {
-        int perm = PTE_P | PTE_W | PTE_U;
+        int perm = PTE_PWU;
         if (addr == 0) {
             // nullptr is inaccessible even to the kernel
             perm = 0;
@@ -249,7 +249,7 @@ void process_setup(pid_t pid, const char* program_name) {
                  a += PAGESIZE) {
             
             // Allocate and map
-            int perm = seg.writable() ? PTE_P | PTE_W | PTE_U : PTE_P | PTE_U;
+            int perm = seg.writable() ? PTE_PWU : PTE_P | PTE_U;
             int r = kpage_alloc(pid, a, perm);
             assert (r == 0);
 
@@ -282,7 +282,7 @@ void process_setup(pid_t pid, const char* program_name) {
     uintptr_t stack_addr = (va_last) - (va_last & PAGEOFFMASK);
     ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
     // allocate and map stack segment
-    int r = kpage_alloc(pid, stack_addr, PTE_P | PTE_W | PTE_U);
+    int r = kpage_alloc(pid, stack_addr, PTE_PWU);
     assert(r == 0);
 
     // mark process as runnable
@@ -457,7 +457,7 @@ int syscall_page_alloc(uintptr_t addr) {
     if (misaligned) return -4;
 
     // Map allocated page to user pagetable
-    int r = kpage_alloc(current->pid, addr, PTE_P | PTE_W | PTE_U);
+    int r = kpage_alloc(current->pid, addr, PTE_PWU);
     if (r != 0) return r;
     void* kptr = vmiter(current->pagetable, addr).kptr();
     assert(kptr);
