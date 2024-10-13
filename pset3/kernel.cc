@@ -23,6 +23,10 @@
 //                                      PROC_START_ADDR
 
 #define PTE_COW PTE_OS1         // permission flag marking copy-on-write pages
+#define PTE_PCU (PTE_P | PTE_COW | PTE_U)
+#define NEWPAGE_PAGENO 1        // page number of universal newpage
+#define NEWPAGE_ADDR (NEWPAGE_PAGENO * PAGESIZE)
+    // universal newpage under copy-on-write model
 
 #define PROC_SIZE 0x40000       // initial state only
 
@@ -78,6 +82,10 @@ void kernel_start(const char* command) {
         assert(r == 0); // mappings during kernel_start MUST NOT fail
                         // (Note that later mappings might fail!!)
     }
+
+    // set up universal newpage
+    memset((void*) NEWPAGE_ADDR, 0, PAGESIZE);
+    physpages[NEWPAGE_PAGENO].refcount++;
 
     // set up process descriptors
     for (pid_t i = 0; i < PID_MAX; i++) {
@@ -135,8 +143,10 @@ void* kalloc(size_t sz) {
 
     for (int tries = 0; tries != NPAGES; ++tries) {
         uintptr_t pa = pageno * PAGESIZE;
+        // newpage is never allocated by `kalloc()`
         if (allocatable_physical_address(pa)
-            && physpages[pageno].refcount == 0) {
+                && physpages[pageno].refcount == 0
+                && pa != NEWPAGE_ADDR) {
             ++physpages[pageno].refcount;
             memset((void*) pa, 0xCC, PAGESIZE);
             return (void*) pa;
@@ -469,7 +479,7 @@ uintptr_t syscall(regstate* regs) {
 //
 //    Returns:
 //      Success: returns  `0`
-//      Errors:  returns `-1` on failed mem page allocation
+//      Errors:  returns `-1` ----no upfront mem allocation for copy-on-write---
 //               returns `-2` on failed pagetable page allocation
 //               returns `-3` on permission denied to kernel virt memspace
 //               returns `-4` on misaligned addr
@@ -484,11 +494,9 @@ int syscall_page_alloc(uintptr_t addr) {
     if (misaligned) return -4;
 
     // Map allocated page to user pagetable
-    int r = kpage_alloc(current->pid, addr, PTE_PWU);
-    if (r != 0) return r;
-    void* kptr = vmiter(current->pagetable, addr).kptr();
-    assert(kptr);
-    memset(kptr, 0, PAGESIZE);
+    int r = vmiter(current->pagetable, addr).try_map(NEWPAGE_ADDR, PTE_PCU);
+    physpages[NEWPAGE_PAGENO].refcount++;
+    if (r != 0) return -2;
 
     return 0;
 }
@@ -531,7 +539,7 @@ pid_t syscall_fork() {
         vmiter pte = vmiter(ptable[pid].pagetable, it.va());
         // Map mem to same phys addr
         bool cow = it.va() != CONSOLE_ADDR && it.user() && it.writable();
-        int perm = cow ? PTE_P | PTE_U | PTE_COW : it.perm();
+        int perm = cow ? PTE_PCU : it.perm();
         int r = pte.try_map(it.pa(), perm);
         if (r != 0) {
             kcleanup(pid);
