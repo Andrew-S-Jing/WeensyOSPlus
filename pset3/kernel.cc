@@ -3,7 +3,7 @@
 #include "k-vmiter.hh"
 #include "obj/k-firstprocess.h"
 #include <atomic>
- 
+
 // kernel.cc
 //
 //    This is the kernel.
@@ -499,7 +499,7 @@ pid_t syscall_fork() {
     ptable[pid].regs = current->regs;
     ptable[pid].state = P_RUNNABLE;
 
-    // Copy kernel mem mappings into new pagetable
+    // Copy parent's mem mappings into new pagetable
     for (vmiter it = vmiter(current->pagetable, 0); !it.done(); it.next()) {
         vmiter pte = vmiter(ptable[pid].pagetable, it.va());
         if (it.va() < PROC_START_ADDR || (it.user() && !it.writable())) {
