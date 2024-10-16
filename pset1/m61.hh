@@ -10,25 +10,25 @@
 #include <map>
 
 
-/// ADDED HEADER DEFINITIONS:
+/// ADDED HEADER DEFINITIONS :
 
-/// struct meta
-///     Structure of the metatdata carried by actives
-struct meta {
+/// struct header
+///     Structure of the header directly before every alloc'd payload
+struct header {
+    char canary1[4];
+    unsigned status;
     size_t size;
-    uintptr_t lower_border_first;
-    uintptr_t upper_border_last;
+    uintptr_t prev_header;
     const char* file;
     int line;
+    char canary2[4];
+
+    header* next();         // Returns the next `header*`
 };
-
-/// type actives_t
-///     Type of the actives map
-typedef std::map<uintptr_t, meta> actives_t;
-
-/// type inactives_t
-///     Type of the inactives map
-typedef std::map<uintptr_t, size_t> inactives_t;
+header* header::next() {
+    char* temp = reinterpret_cast<char*>(this) + sz_to_allot(this->size);
+    return reinterpret_cast<header*>(temp) + 1;
+}
 
 /// m61_activate_mem(addr, sz, allotment, file, line)
 ///     Adds the allocation described by the arguments, as well as the
@@ -38,16 +38,16 @@ void m61_activate_mem(uintptr_t addr, size_t sz, size_t allotment,
                       const char* file, int line);
 
 /// m61_find_free_space(allotment)
-///     Return a pointer to at least `allotment` bytes of inactive memory.
+///     Returns a `header*` to >=`allotment` bytes of inactive payload capacity.
 ///     Returns `nullptr` if no such space is found.
+///     `allotment == 0` is not allowed.
 ///     See Citation "Valfind" for method to value-search in a std::map
-void* m61_find_free_space(size_t allotment);
+header* m61_find_free_space(size_t allotment);
 
 /// m61_free_bug_detect(ptr, file, line)
 ///     If any memory bugs during the process of `m61_free()`, calls `abort()`.
-///     Returns the iterator to the element to be freed by m61_free() to avoid
-///       double-searching through the actives map.
-actives_t::iterator m61_free_bug_detect(void* ptr, const char* file, int line);
+///     Returns the `header*` of the elt to be freed by `m61_free()`
+header* m61_free_bug_detect(void* ptr, const char* file, int line);
 
 /// m61_coalesce(addr)
 ///     Coalesces the `inactives` element with key `(uintptr_t)ptr` with its

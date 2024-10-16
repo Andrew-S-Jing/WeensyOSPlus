@@ -16,6 +16,17 @@
 // See Citation "Border" for idea of buffer-borders around each m61_malloc
 static const size_t BORD_BLOCKS = 1;
 
+// Size of `header` struct
+static const size_t HSIZE = sizeof(header);
+
+// Canary value
+static const char CANARY = 61;
+static const char CANARIES[4] = {61, 61, 61, 61};
+
+// Extended, quasi-booleans for more protection against wild writes
+static const unsigned ACTIVE =  61616161616161616161616161616161;
+static const unsigned INACTIVE = 0x61616161;
+
 // Specs for the border regions
 // Not overflow protected, but BORD_BLOCKS should be kept low anyways
 static const size_t BORD_SZ = BORD_BLOCKS * alignof(std::max_align_t);
@@ -42,6 +53,17 @@ m61_memory_buffer::m61_memory_buffer() {
                                  // We want memory freshly allocated by the OS
     assert(buf != MAP_FAILED);
     this->buffer = (char*) buf;
+    // Initialize buffer to be one, big inactive chunk of memory
+    header initial_head = {
+        .canary1 = *CANARIES,
+        .status = INACTIVE,
+        .size = default_buffer.size - HSIZE,
+        .prev_header = 0,
+        .file = 0,
+        .line = 0,
+        .canary2 = *CANARIES
+    };
+    *((header*) default_buffer.buffer) = initial_head;
 }
 
 m61_memory_buffer::~m61_memory_buffer() {
@@ -68,28 +90,10 @@ static m61_statistics stats = {
     reinterpret_cast<uintptr_t>(default_buffer.buffer)    // largest heap addr
 };
 
-// actives
-//     std::map of all currently active allocations
-//     Elt in actives is {addr, metadata}
-//     See type actives_t and substruct meta in "m61.hh"
-static actives_t actives;
-
-// inactives
-//     std::map of all currently inactive allocations
-//     Elt in inactives is {addr, allotment}
-//     Initialized to mark entire buffer as inactive
-//     See type inactives_t in "m61.hh"
-//     Allotment defined below by `sz_to_allot()`
-static inactives_t inactives = {
-    {
-        reinterpret_cast<uintptr_t>(default_buffer.buffer) + BORD_SZ,
-        default_buffer.size
-    }
-};
-
-// frees
-//     Set of previously freed pointers - set of currently allocated pointers
-static std::set<uintptr_t> frees;
+// `begin` is the first address of `default_buffer.buffer`
+static header* begin = (header*) default_buffer.buffer;
+// `end` is the 1-past-end address of `default_buffer.buffer`
+static header* end = (header*) (default_buffer.buffer + default_buffer.size);
 
 
 
@@ -119,7 +123,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     
     // Check for enough free space in inactives
-    void* ptr = m61_find_free_space(allotment);
+    header* ptr = m61_find_free_space(allotment);
     uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
 
     // Fail on no space found by `m61_find_free_space()`
@@ -246,12 +250,13 @@ void m61_activate_mem(uintptr_t addr, size_t sz, size_t allotment,
     uintptr_t upper_border_last = lower_border_first + allotment - 1;
 
     // Add allocated pointer and its metadata to actives
-    meta metadata = {
-        sz,                     // metadata.size
-        lower_border_first,     // metadata.lower_border_first
-        upper_border_last,      // metadata.upper_border_last
-        file,                   // metadata.file
-        line                    // metadata.line
+    header head = {
+        .size = sz,
+        .lower_border_first = lower_border_first,
+        .upper_border_last = upper_border_last,
+        .prev_header = ,
+        .file = file,
+        .line = line
     };
     actives.insert({addr, metadata});
 
@@ -269,20 +274,20 @@ void m61_activate_mem(uintptr_t addr, size_t sz, size_t allotment,
 
 
 /// m61_find_free_space(allotment)
-///     Return a pointer to at least `allotment` bytes of inactive memory.
+///     Returns a `header*` to >=`allotment` bytes of inactive payload capacity.
 ///     Returns `nullptr` if no such space is found.
 ///     `allotment == 0` is not allowed.
 ///     See Citation "Valfind" for method to value-search in a std::map
 
-void* m61_find_free_space(size_t allotment) {
-    void* ptr = nullptr;
-    for (inactives_t::iterator iter = inactives.begin();
-         iter != inactives.end();
-         iter++) {
-            if (allotment <= iter->second) {
-                ptr = reinterpret_cast<void*>(iter->first);
+header* m61_find_free_space(size_t allotment) {
+    header* ptr = nullptr;
+    for (header* cursor = begin; cursor != end; cursor = cursor->next()) {
+            size_t cursor_allotment = sz_to_allot(cursor->size);
+            if (cursor->status == INACTIVE && allotment <= cursor_allotment) {
+                ptr = cursor;
                 break;
             }
+            cursor = (header*) (((char*) cursor) + cursor_allotment);
     }
     return ptr;
 }
