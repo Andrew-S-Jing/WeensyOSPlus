@@ -3,15 +3,14 @@ Author and collaborators
 
 Primary student
 ---------------
-(Your name.)
+Andrew Jing
 
 
 Collaborators
 -------------
-(List any other collaborators and describe help you got from other students
-in the class.)
+N/A
 
 
 Citations
 ---------
-(List any other sources consulted.)
+N/A
