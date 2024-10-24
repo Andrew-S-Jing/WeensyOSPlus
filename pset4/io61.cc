@@ -5,7 +5,28 @@
 #include <cerrno>
 
 // io61.cc
-//    YOUR CODE HERE!
+//    Debug info:
+//      gdb --args cat61 -o outputs/out.txt inputs/text32k.txt
+
+
+// buffer
+//    General purpose buffer struct
+
+static const size_t BUFMAX = 4096;
+struct buffer {
+    unsigned char buf[BUFMAX];
+    ssize_t size = 0;
+    ssize_t cursor = 0;
+    int fd = -1;
+};
+
+
+// read_buf
+//    Pre-fetching buffers
+
+static const size_t NBUFS = 1;
+static buffer read_bufs[NBUFS];
+static buffer* read_buf = read_bufs;
 
 
 // io61_file
@@ -47,17 +68,8 @@ int io61_close(io61_file* f) {
 //    which equals -1, on end of file or error.
 
 int io61_readc(io61_file* f) {
-    unsigned char ch;
-    ssize_t nr = read(f->fd, &ch, 1);
-    if (nr == 1) {
-        return ch;
-    } else if (nr == 0) {
-        errno = 0; // clear `errno` to indicate EOF
-        return -1;
-    } else {
-        assert(nr == -1 && errno > 0);
-        return -1;
-    }
+    unsigned char c;
+    return io61_read(f, &c, 1) <= 0 ? -1 : (int) c;
 }
 
 
@@ -72,7 +84,24 @@ int io61_readc(io61_file* f) {
 //    This is called a “short read.”
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
-    return read(f->fd, buf, sz);
+    assert(read_buf->cursor <= read_buf->size);
+    if (f->mode == O_WRONLY) return -1;
+    if (sz == 0) return 0;
+    if (f->fd != read_buf->fd || read_buf->cursor == read_buf->size) {
+        ssize_t r = read(f->fd, (void*) read_buf, BUFMAX);
+        if (r <= 0) return r;
+        if (f->fd != read_buf->fd)
+            lseek(read_buf->fd, read_buf->cursor - read_buf->size, SEEK_CUR);
+        read_buf->size = (size_t) r;
+        read_buf->cursor = 0;
+        read_buf->fd = f->fd;
+    }
+    size_t nreadable = read_buf->size - read_buf->cursor;
+    size_t nread = sz > nreadable ? nreadable : sz;
+    memcpy(buf, read_buf->buf + read_buf->cursor, nread);
+    read_buf->cursor += nread;
+    ssize_t nremaining = io61_read(f, buf + nread, sz - nread);
+    return nremaining == -1 ? -1 : nread + nremaining;
 }
 
 
@@ -122,7 +151,11 @@ int io61_flush(io61_file* f) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
-    off_t r = lseek(f->fd, (off_t) off, SEEK_SET);
+    if (f->fd == read_buf->fd && f->mode == O_RDONLY) {
+        read_buf->cursor = 0;
+        read_buf->size = 0;
+    }
+    off_t r = lseek(f->fd, off, SEEK_SET);
     // Ignore the returned offset unless it’s an error.
     if (r == -1) {
         return -1;
