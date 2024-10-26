@@ -22,12 +22,12 @@ struct buffer {
 };
 
 
-// read_buf
+// cache_buf
 //    Pre-fetching buffers, defined this way for scalability
 
 static const size_t NBUFS = 1;
-static buffer read_bufs[NBUFS];
-static buffer* read_buf = read_bufs;
+static buffer cache_bufs[NBUFS];
+static buffer* cache_buf = cache_bufs;
 
 
 // io61_file
@@ -106,55 +106,55 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
     off_t nforward = 0;
 
     // If reading outside of current buffer (or different file), update buffer
-    if (f->fd != read_buf->fd
-            || f->cursor < read_buf->start || f->cursor >= read_buf->end) {
+    if (f->fd != cache_buf->fd
+            || f->cursor < cache_buf->start || f->cursor >= cache_buf->end) {
 
         off_t newbufstart = f->cursor;
 
         // If reading different file
-        if (f->fd != read_buf->fd) {
+        if (f->fd != cache_buf->fd) {
             if (f->cursor == f->size) return 0;
-            lseek(read_buf->fd, read_buf->last_read, SEEK_SET);
+            lseek(cache_buf->fd, cache_buf->last_read, SEEK_SET);
 
         // If reading after current buffer (not directly after)
-        } else if (f->cursor > read_buf->end) {
+        } else if (f->cursor > cache_buf->end) {
             if (lseek(f->fd, f->cursor, SEEK_SET) == -1) return -1;
 
         // If reading before current buffer
-        } else if (f->cursor < read_buf->start) {
+        } else if (f->cursor < cache_buf->start) {
             // First perform any partial forward reads
-            if (f->cursor + (off_t) sz > read_buf->start) {
-                off_t ndefer = read_buf->start - f->cursor;
+            if (f->cursor + (off_t) sz > cache_buf->start) {
+                off_t ndefer = cache_buf->start - f->cursor;
                 off_t savecursor = f->cursor;
-                f->cursor = read_buf->start;
+                f->cursor = cache_buf->start;
                 nforward = io61_read(f, buf + ndefer, sz - ndefer);
                 if (nforward == -1) return -1;
                 f->cursor = savecursor;
                 sz = ndefer;
             }
             // Set new buffer start offset
-            newbufstart = read_buf->start + sz - BUFMAX;
+            newbufstart = cache_buf->start + sz - BUFMAX;
             newbufstart = newbufstart > 0 ? newbufstart : 0;
             newbufstart = newbufstart > f->cursor ? f->cursor : newbufstart;
             if (lseek(f->fd, newbufstart, SEEK_SET) == -1) return -1;
         }
 
         // Attempt read, set buffer information
-        ssize_t r = read(f->fd, (void*) read_buf->buf, BUFMAX);
-        read_buf->start = newbufstart;
-        read_buf->end = read_buf->start + r;
-        read_buf->fd = f->fd;
+        ssize_t r = read(f->fd, (void*) cache_buf->buf, BUFMAX);
+        cache_buf->start = newbufstart;
+        cache_buf->end = cache_buf->start + r;
+        cache_buf->fd = f->fd;
         if (r <= 0) return r;
     }
 
     // Calculate number of bytes to read from current buffer
-    size_t nreadable = read_buf->end - f->cursor;
+    size_t nreadable = cache_buf->end - f->cursor;
     size_t nread = sz > nreadable ? nreadable : sz;
 
     // Read from current buffer
-    memcpy(buf, read_buf->buf + (f->cursor - read_buf->start), nread);
+    memcpy(buf, cache_buf->buf + (f->cursor - cache_buf->start), nread);
     f->cursor += nread;
-    read_buf->last_read = f->cursor;
+    cache_buf->last_read = f->cursor;
 
     // Execute the remaining read request
     ssize_t nremaining = io61_read(f, buf + nread, sz - nread);
@@ -212,7 +212,7 @@ int io61_flush(io61_file* f) {
 int io61_seek(io61_file* f, off_t off) {
 
     // Seeks for current buffer's associated FD, avoids syscalls
-    if (f->size != -1 && f->fd == read_buf->fd && f->mode == O_RDONLY) {
+    if (f->size != -1 && f->fd == cache_buf->fd && f->mode == O_RDONLY) {
         if (off >= 0 && off <= f->size) {
             f->cursor = off;
             return 0;
