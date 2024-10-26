@@ -92,7 +92,8 @@ int io61_readc(io61_file* f) {
 //    This is called a “short read.”
 //
 //    Uses one prefetching buffer for reads. Forward reads execute normally,
-//    While backward reads 
+//    While backward reads first read any partial forward reads, then update
+//    the buffer to end on the last byte of the read.
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
