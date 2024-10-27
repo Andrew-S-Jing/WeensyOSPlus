@@ -3,32 +3,47 @@
 #include <sys/stat.h>
 #include <climits>
 #include <cerrno>
+#include <map>
 
 // io61.cc
 //    Debug info:
 //      gdb --args cat61 -o outputs/out.txt inputs/text32k.txt
+//
+//    For test c8, put this into ".gdbinit":
+//      r <(cat inputs/text32k.txt) >> cat > outputs/out.txt
 
 
-// buffer
-//    General purpose buffer struct
+// cachedata
+//    General purpose cachedata struct
 
 static const size_t BUFMAX = 4096;      // Buffer size (bytes)
-struct buffer {
-    unsigned char buf[BUFMAX];          // Buffer object
-    off_t start = 0;                    // Buffer's starting offset
-    off_t end = 0;                      // Buffer's one-past-end offset
-    off_t last = 0;                     // Last post-read/write offset for `fd`
-    int fd = -1;                        // Buffer's associated FD
-    bool clean = true;                  // Buffer's clean/dirty status
+struct alignas(32) cachedata {
+    int fd;                             // Cache's associated FD
+    off_t start;                        // Buffer's starting offset
+    off_t end;                          // Buffer's one-past-end offset
+    off_t last_read;                    // Offset of last `io61_read` for `fd`
+    unsigned char* buf;                 // Buffer object
+
+    cachedata();                        // Constructor
+    ~cachedata();                       // Destructor
 };
+cachedata::cachedata() {
+    fd = -1;
+    start = 0;
+    end = 0;
+    last_read = 0;
+    buf = new unsigned char[BUFMAX];
+}
+cachedata::~cachedata() {
+    // delete[] buf;
+}
 
 
-// cache
+// caches
 //    Pre-fetching buffers, defined this way for scalability
 
-static const size_t NBUFS = 1;
-static buffer caches[NBUFS];
-static buffer* cache = caches;
+static std::map<int, cachedata> caches;
+static cachedata scache;        // Shared/seekable cache
 
 
 // io61_file
@@ -39,7 +54,28 @@ struct io61_file {
     int mode;           // open mode (O_RDONLY or O_WRONLY)
     off_t size = -1;    // file size
     off_t cursor = 0;   // io61's file cursor (different from system's cursor)
+    bool seekable = false;
+                        // file seekability
 };
+
+
+// cacheget(f)
+//    Finds the cache associated with file `f`
+//    Returns iterator of the `caches` element with key `fd` if unseekable
+//    or `scache` if seekable
+
+cachedata static cacheget(io61_file* f) {
+    return f->seekable ? scache : caches[f->fd];
+}
+
+
+// cacheassign(f)
+//    Assigns `cache` to the cache associated with file `f`
+
+void static cacheassign(io61_file* f, cachedata cache) {
+    if (f->seekable) scache = cache;
+    else caches[f->fd] = cache;
+}
 
 
 // io61_fdopen(fd, mode)
@@ -53,6 +89,8 @@ io61_file* io61_fdopen(int fd, int mode) {
     f->fd = fd;
     f->mode = mode;
     f->size = io61_filesize(f);
+    f->seekable = lseek(f->fd, 0, SEEK_CUR) >= 0;
+    if (!f->seekable) caches.insert({f->fd, cachedata()});
     return f;
 }
 
@@ -63,26 +101,9 @@ io61_file* io61_fdopen(int fd, int mode) {
 int io61_close(io61_file* f) {
     io61_flush(f);
     int r = close(f->fd);
+    if (!f->seekable) caches.erase(f->fd);
     delete f;
     return r;
-}
-
-
-// flush_cache
-//    Flushes cache
-
-int flush_cache(bool seek) {
-    if (cache->fd == -1) return 0;
-    if (!cache->clean) {
-        ssize_t r = write(cache->fd, cache->buf, cache->end - cache->start);
-        if (r == -1) return -1;
-        cache->clean = true;
-    } else if (seek) {
-        // **Needs fixing for non-seekable files. Currently can't put
-        //   extra, not-yet-read bytes into some other buffer for saving.**
-        lseek(cache->fd, cache->last, SEEK_SET);
-    }
-    return 0;
 }
 
 
@@ -118,67 +139,77 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
     // Check entry errors
     if (f->mode == O_WRONLY) return -1;
-    assert(f->cursor >= 0 && cache->end - cache->start <= BUFMAX);
+    assert(f->cursor >= 0);
 
     // Base case
     if (sz == 0) return 0;
+
+    // Locals
+    cachedata cache = cacheget(f);
     off_t nforward = 0;
 
     // If reading outside of current buffer (or different file), update buffer
-    if (f->fd != cache->fd
-            || f->cursor < cache->start || f->cursor >= cache->end) {
+    if ((f->seekable && f->fd != cache.fd)
+            || (f->cursor < cache.start || f->cursor >= cache.end)) {
 
         off_t newbufstart = f->cursor;
 
-        // If reading different file
-        if (f->fd != cache->fd) {
-            if (f->cursor == f->size) return 0;
-            flush_cache(true);
+        // If file is seekable
+        if (f->seekable) {
+            // If reading different file
+            if (f->fd != cache.fd) {
+                if (f->cursor == f->size) return 0;
+                lseek(cache.fd, cache.last_read, SEEK_SET);
 
-        // If reading after current buffer (not directly after)
-        } else if (f->cursor > cache->end) {
-            flush_cache(false);
-            if (lseek(f->fd, f->cursor, SEEK_SET) == -1) return -1;
+            // If EOF
+            } else if (f->cursor == f->size) {
+                return 0;
 
-        // If reading before current buffer
-        } else if (f->cursor < cache->start) {
-            // First perform any partial forward reads
-            if (f->cursor + (off_t) sz > cache->start) {
-                off_t ndefer = cache->start - f->cursor;
-                off_t savecursor = f->cursor;
-                f->cursor = cache->start;
-                nforward = io61_read(f, buf + ndefer, sz - ndefer);
-                if (nforward == -1) return -1;
-                f->cursor = savecursor;
-                sz = ndefer;
+            // If reading after current buffer (not directly after)
+            } else if (f->cursor > cache.end) {
+                if (lseek(f->fd, f->cursor, SEEK_SET) == -1) return -1;
+
+            // If reading before current buffer
+            } else if (f->cursor < cache.start) {
+                // First perform any partial forward reads
+                if (f->cursor + (off_t) sz > cache.start) {
+                    off_t ndefer = cache.start - f->cursor;
+                    off_t savecursor = f->cursor;
+                    f->cursor = cache.start;
+                    nforward = io61_read(f, buf + ndefer, sz - ndefer);
+                    if (nforward == -1) return -1;
+                    f->cursor = savecursor;
+                    sz = ndefer;
+                }
+                // Set new buffer start offset
+                newbufstart = cache.start + sz - BUFMAX;
+                newbufstart = newbufstart > 0 ? newbufstart : 0;
+                newbufstart = newbufstart > f->cursor ? f->cursor : newbufstart;
+                if (lseek(f->fd, newbufstart, SEEK_SET) == -1) return -1;
             }
-            // Set new buffer start offset
-            newbufstart = cache->start + sz - BUFMAX;
-            newbufstart = newbufstart > 0 ? newbufstart : 0;
-            newbufstart = newbufstart > f->cursor ? f->cursor : newbufstart;
-            flush_cache(false);
-            if (lseek(f->fd, newbufstart, SEEK_SET) == -1) return -1;
-        } else if (f->cursor == cache->end) {
-            flush_cache(false);
         }
 
         // Attempt read, set buffer information
-        ssize_t r = read(f->fd, (void*) cache->buf, BUFMAX);
-        cache->start = newbufstart;
-        cache->end = cache->start + r;
-        cache->fd = f->fd;
-        cache->clean = true;
-        if (r <= 0) return r;
+        assert(f->seekable || f->cursor == cache.end);
+        ssize_t r = read(f->fd, (void*) cache.buf, BUFMAX);
+        cache.start = newbufstart;
+        cache.end = cache.start + r;
+        cache.fd = f->fd;
+        if (r <= 0) {
+            cacheassign(f, cache);
+            return r;
+        }
     }
 
     // Calculate number of bytes to read from current buffer
-    size_t nreadable = cache->end - f->cursor;
+    size_t nreadable = cache.end - f->cursor;
     size_t nread = sz > nreadable ? nreadable : sz;
 
     // Read from current buffer
-    memcpy(buf, cache->buf + (f->cursor - cache->start), nread);
+    memcpy(buf, cache.buf + (f->cursor - cache.start), nread);
     f->cursor += nread;
-    cache->last = f->cursor;
+    cache.last_read = f->cursor;
+    cacheassign(f, cache);
 
     // Execute the remaining read request
     ssize_t nremaining = io61_read(f, buf + nread, sz - nread);
@@ -191,8 +222,13 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on error.
 
 int io61_writec(io61_file* f, int c) {
-    ssize_t r = io61_write(f, (const unsigned char*) &c, 1);
-    return -(r == -1);
+    unsigned char ch = c;
+    ssize_t nw = write(f->fd, &ch, 1);
+    if (nw == 1) {
+        return 0;
+    } else {
+        return -1;
+    }
 }
 
 
@@ -204,72 +240,7 @@ int io61_writec(io61_file* f, int c) {
 //    before the error occurred.
 
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
-
-    // Check entry errors
-    if (f->mode == O_RDONLY) return -1;
-    assert(f->cursor >= 0 && cache->end - cache->start <= BUFMAX);
-
-    // Base case
-    if (sz == 0) return 0;
-    off_t nforward = 0;
-
-    // If writing outside of current buffer (or different file), update buffer
-    if (f->fd != cache->fd
-            || f->cursor < cache->start || f->cursor >= cache->end) {
-
-        off_t newbufstart = f->cursor;
-
-        // If writing different file
-        if (f->fd != cache->fd) {
-            flush_cache(true);
-
-        // If writing after current buffer (not directly after)
-        } else if (f->cursor > cache->end) {
-            flush_cache(false);
-            if (lseek(f->fd, f->cursor, SEEK_SET) == -1) return -1;
-
-        // If writing before current buffer
-        } else if (f->cursor < cache->start) {
-            // First perform any partial forward reads
-            if (f->cursor + (off_t) sz > cache->start) {
-                off_t ndefer = cache->start - f->cursor;
-                off_t savecursor = f->cursor;
-                f->cursor = cache->start;
-                nforward = io61_write(f, buf + ndefer, sz - ndefer);
-                if (nforward == -1) return -1;
-                f->cursor = savecursor;
-                sz = ndefer;
-            }
-            // Set new buffer start offset
-            newbufstart = cache->start + sz - BUFMAX;
-            newbufstart = newbufstart > 0 ? newbufstart : 0;
-            newbufstart = newbufstart > f->cursor ? f->cursor : newbufstart;
-            flush_cache(false);
-            if (lseek(f->fd, newbufstart, SEEK_SET) == -1) return -1;
-        } else if (f->cursor == cache->end) {
-            flush_cache(false);
-        }
-
-        // Set buffer information
-        cache->start = newbufstart;
-        cache->end = cache->start;
-        cache->fd = f->fd;
-    }
-
-    // Calculate number of bytes to write to current buffer
-    size_t nwritable = cache->start + BUFMAX - f->cursor;
-    size_t nwrite = sz > nwritable ? nwritable : sz;
-
-    // Write to current buffer
-    memcpy(cache->buf + (f->cursor - cache->start), buf, nwrite);
-    f->cursor += nwrite;
-    cache->end = f->cursor;
-    cache->last = f->cursor;
-    cache->clean = false;
-
-    // Execute the remaining read request
-    ssize_t nremaining = io61_write(f, buf + nwrite, sz - nwrite);
-    return nremaining == -1 ? -1 : nwrite + nremaining + nforward;
+    return write(f->fd, buf, sz);
 }
 
 
@@ -282,8 +253,7 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
 //    drop any data cached for reading.
 
 int io61_flush(io61_file* f) {
-    if (f->mode == O_RDONLY) return 0;
-    if (f->fd == cache->fd) return flush_cache(false);
+    (void) f;
     return 0;
 }
 
@@ -297,21 +267,20 @@ int io61_flush(io61_file* f) {
 int io61_seek(io61_file* f, off_t off) {
 
     // Handles non-seekable files
-    if (f->size == -1) return -1;
+    if (!f->seekable) return -1;
 
     // Seeks for current buffer's associated FD, avoids syscalls
-    if (f->fd == cache->fd && f->mode == O_RDONLY) {
-        if (off >= 0 && off <= f->size) {
-            f->cursor = off;
-            return 0;
-        }
-        return -1;
+
+    if (f->fd == scache.fd && off >= 0 && off <= f->size) {
+        f->cursor = off;
+        return 0;
     }
 
     // Seeks for FDs not in current buffer
     off_t r = lseek(f->fd, off, SEEK_SET);
     // Ignore the returned offset unless it’s an error.
-    return r == -1 ? -1 : 0;
+    if (r == -1) return -1;
+    return 0;
 }
 
 
