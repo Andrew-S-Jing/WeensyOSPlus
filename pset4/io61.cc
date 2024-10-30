@@ -2,8 +2,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <climits>
-#include <map>
-#include <iostream>
 
 // io61.cc
 //    Debug info:
@@ -22,101 +20,37 @@
 //      gdb wreverse61
 
 
-// cachedata
-//    General purpose cachedata struct
+// cache
+//    General purpose cache struct
 
-static const ssize_t BUFMAX = 4096;                 // Buffer size (bytes)
-static const ssize_t OFFBUFMASK = BUFMAX - 1;       // Mask for `n % BUFMAX`
-struct alignas(64) cachedata {
-    int fd;                             // Cache's associated FD
-    bool clean;                         // Buffer's clean/dirty status
-    off_t start;                        // Buffer's starting offset
-    off_t end;                          // Buffer's one-past-end offset
-    off_t last;                         // Offset of last read/write for `fd`
-    unsigned char* buf;                 // Buffer object
-
-    cachedata(int);                     // Constructor
-    ~cachedata();                       // Destructor
+static const ssize_t BUFMAX = 4096;             // Buffer size (bytes)
+static const ssize_t OFFBUFMASK = BUFMAX - 1;   // Mask for `n % BUFMAX`
+struct alignas(32) cache {
+    off_t start = 0;                        // Cache's starting offset
+    off_t end = 0;                          // Cache's one-past-end offset
+    unsigned char* buf = new unsigned char[BUFMAX];
+                                            // Buffer object
+    
+    ~cache();                               // Destructor
 };
-cachedata::cachedata(int fd_) {
-    fd = fd_;
-    clean = true;
-    start = -1;
-    end = -1;
-    last = 0;
-    buf = new unsigned char[BUFMAX];
-}
-cachedata::~cachedata() {
+cache::~cache() {
     delete[] buf;
 }
-
-
-// TODO: One per FILE!!! single-slot cache
-// TODO: Read section! Read chapter! Read man pages for read/write!
-// TODO: Figure out why writing is delayed from the corresponding read in c11 (strace)
-// TODO: Handle errno
-
-
-// caches
-//    Pre-fetching buffers, defined this way for scalability
-
-static std::map<int, cachedata*> caches;
-static cachedata scache = cachedata(-1);      // Shared/seekable cache
 
 
 // io61_file
 //    Data structure for io61 file wrappers. Add your own stuff.
 
-struct alignas(32) io61_file {
-    int fd = -1;        // file descriptor
-    int mode;           // open mode (O_RDONLY or O_WRONLY)
-    off_t size = -1;    // file size
-    off_t cursor = 0;   // io61's file cursor (different from system's cursor)
-    bool seekable = false;
-                        // file seekability
+struct alignas(64) io61_file {
+    int fd = -1;            // file descriptor
+    int mode;               // open mode (O_RDONLY or O_WRONLY)
+    off_t size = -1;        // file size
+    off_t cursor = 0;       // io61 file cursor (not kernel file pointer)
+    bool seekable = false;  // file seekability
+    bool mappable = false;  // file mappability
+
+    cache c;                // single-slot cache
 };
-
-
-// cacheget(f)
-//    Finds the cache associated with file `f`
-//    Returns iterator of the `caches` element with key `fd` if unseekable
-//    or `scache` if seekable
-
-cachedata* cacheget(io61_file* f) {
-    return f->seekable ? &scache : caches[f->fd];
-}
-
-
-// cacheflush(cache)
-//    Flushes `cache`. Returns `0` on success and `-1` on error.
-
-int cacheflush(cachedata* cache) {
-    if (cache->clean) return 0;
-    ssize_t sz = cache->end - cache->start;
-    ssize_t npending = sz;
-    while (npending != 0) {
-        ssize_t r = write(cache->fd, cache->buf + (sz - npending), npending);
-        if (r == -1) {
-            return -1;
-            if (npending == sz) return -1;
-            break;
-        }
-        npending -= r;
-    }
-    cache->start = -1;
-    cache->end = -1;
-    cache->clean = true;
-    return 0;
-}
-
-
-// syspointer_fix(cache)
-//    Restores file pointer associated with FD `cache->fd` to last user call.
-
-void syspointer_fix(cachedata* cache) {
-    if (cache->clean && cache == &scache && cache->last != cache->end)
-        assert(lseek(cache->fd, cache->last, SEEK_SET) == cache->last);
-}
 
 
 // io61_fdopen(fd, mode)
@@ -130,8 +64,8 @@ io61_file* io61_fdopen(int fd, int mode) {
     f->fd = fd;
     f->mode = mode;
     f->size = io61_filesize(f);
-    f->seekable = lseek(f->fd, 0, SEEK_CUR) != -1 && f->size != -1;
-    if (!f->seekable) caches.insert({f->fd, new cachedata(f->fd)});
+    f->seekable = lseek(f->fd, 0, SEEK_CUR) != -1;
+    f->mappable = f->size != -1;
     return f;
 }
 
@@ -142,7 +76,6 @@ io61_file* io61_fdopen(int fd, int mode) {
 int io61_close(io61_file* f) {
     io61_flush(f);
     int r = close(f->fd);
-    if (!f->seekable) delete caches.extract(f->fd).mapped();
     delete f;
     return r;
 }
@@ -169,58 +102,40 @@ int io61_readc(io61_file* f) {
 //    This is called a “short read.”
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
-    
+
     // Entry errors
     if (f->mode == O_WRONLY || f->fd < 0) return -1;
-    assert(f->cursor >= 0);
+    assert(f->cursor >= 0 && f->c.start <= f->c.end && f->c.end - f->c.start <= BUFMAX);
 
     // Catch size 0 and EOF reads early
     if (sz == 0 || f->cursor == f->size) return 0;
 
     // Locals
-    cachedata* cache = cacheget(f);
-    assert(cache->start <= cache->end && cache->end - cache->start <= BUFMAX);
     if (f->size >= 0 && (size_t) (f->size - f->cursor) < sz) sz = f->size - f->cursor;
     ssize_t npending = sz;
-
-    // Reading uncached file, must update buffer
-    if (f->fd != cache->fd) {
-        cacheflush(cache);
-        assert(f->seekable);
-        if (cache->fd != -1) syspointer_fix(cache);
-        cache->fd = f->fd;
-        cache->start = -1;
-        cache->end = -1;
-    }
 
     // Main loop
     while (npending != 0) {
 
-        // Reading outside buffer, must update buffer (aligned to `BUFMAX`)
-        if (f->cursor < cache->start || f->cursor >= cache->end || cache->start == -1) {
-            cacheflush(cache);
-            cache->start = f->cursor - (f->cursor & OFFBUFMASK);
-            cache->last = cache->start;
-            assert (cache->start >= 0 && (cache->start <= f->size || f->size < 0));
-            syspointer_fix(cache);
-            ssize_t r = read(f->fd, cache->buf, BUFMAX);
+        // Reading outside cache, update cache and buffer (aligned to `BUFMAX`)
+        if (f->cursor < f->c.start || f->cursor >= f->c.end || f->c.start < 0) {
+            f->c.start = f->cursor - (f->cursor & OFFBUFMASK);
+            assert (f->c.start >= 0 && (f->c.start < f->size || f->size < 0));
+            if (f->seekable && f->c.start != f->c.end) lseek(f->fd, f->c.start, SEEK_SET);
+            ssize_t r = read(f->fd, f->c.buf, BUFMAX);
             assert(r != -1);
-            if (r == 0) {
-                errno = 0;
-                break;      // EOF
-            }
-            cache->end = cache->start + r;
+            if (r == 0) break;      // EOF
+            f->c.end = f->c.start + r;
         }
 
-        // Calculate number of bytes to read from current buffer
-        ssize_t nreadable = cache->end - f->cursor;
+        // Calculate number of bytes to copy from current buffer
+        ssize_t nreadable = f->c.end - f->cursor;
         ssize_t nread = npending > nreadable ? nreadable : npending;
 
-        // Read from buffer, update metadata
-        memcpy(buf, cache->buf + (f->cursor - cache->start), nread);
+        // Copy from buffer, update cache
+        memcpy(buf, f->c.buf + (f->cursor - f->c.start), nread);
         npending -= nread;
         f->cursor += nread;
-        cache->last = f->cursor;
         buf += nread;
     }
     
@@ -233,8 +148,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on error.
 
 int io61_writec(io61_file* f, int c) {
-    unsigned char c_ = c;
-    return -(io61_write(f, &c_, 1) != 1);
+    return -(io61_write(f, (unsigned char*) &c, 1) != 1);
 }
 
 
@@ -249,52 +163,37 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
     
     // Entry errors
     if (f->mode == O_RDONLY || f->fd < 0) return -1;
-    assert(f->cursor >= 0);
+    assert(f->cursor >= 0 && f->c.start <= f->c.end && f->c.end - f->c.start <= BUFMAX);
 
-    // Catch size writes early
+    // Catch size 0 writes early
     if (sz == 0) return 0;
 
     // Locals
-    cachedata* cache = cacheget(f);
-    assert(cache->start <= cache->end && cache->end - cache->start <= BUFMAX);
     ssize_t npending = sz;
-
-    // Writing uncached file, must update buffer
-    if (f->fd != cache->fd) {
-        cacheflush(cache);
-        assert(f->seekable);
-        if (cache->fd != -1) syspointer_fix(cache);
-        cache->fd = f->fd;
-        cache->start = -1;
-        cache->end = -1;
-    }
 
     // Main loop
     while (npending != 0) {
 
-        // Writing outside buffer, must update buffer (not aligned to `BUFMAX`)
-        if (f->cursor < cache->start || f->cursor - cache->start >= BUFMAX || cache->start == -1) {
-            cacheflush(cache);
-            cache->start = f->cursor;
-            cache->last = cache->start;
-            syspointer_fix(cache);
-            cache->end = cache->start;
+        // Writing outside cache, update cache and buffer (not aligned to `BUFMAX`)
+        if (f->c.start == f->c.end || f->cursor < f->c.start || f->cursor >= f->c.start + BUFMAX || f->c.start < 0) {
+            io61_flush(f);
+            f->c.start = f->cursor;
+            if (f->seekable && f->c.start != f->c.end) lseek(f->fd, f->c.start, SEEK_SET);
+            f->c.end = f->c.start;
         }
 
-        // Calculate number of bytes to write to current buffer
-        ssize_t nwritable = BUFMAX - (f->cursor - cache->start);
+        // Calculate number of bytes to copy to current buffer
+        ssize_t nwritable = f->c.start + BUFMAX - f->cursor;
         ssize_t nwrite = npending > nwritable ? nwritable : npending;
 
-        // Write to buffer, update metadata
-        memcpy(cache->buf + (f->cursor - cache->start), buf, nwrite);
-        cache->clean = false;
+        // Copy to buffer, update cache
+        memcpy(f->c.buf + (f->cursor - f->c.start), buf, nwrite);
         npending -= nwrite;
         f->cursor += nwrite;
-        if (f->cursor > cache->end) cache->end = f->cursor;
-        cache->last = f->cursor;
+        if (f->cursor > f->c.end) f->c.end = f->cursor;
         buf += nwrite;
     }
-
+    
     return sz - npending;
 }
 
@@ -308,10 +207,20 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
 //    drop any data cached for reading.
 
 int io61_flush(io61_file* f) {
-    if (f->mode == O_RDONLY) return 0;
-    cachedata* cache = cacheget(f);
-    if (cache->fd != f->fd) return 0;
-    return cacheflush(cache);
+
+    // Entry errors
+    if (f->fd < 0) return -1;
+
+    // Catch read-only files and clean caches early
+    if (f->mode == O_RDONLY || f->c.start == f->c.end) return 0;
+
+    // Main loop (assumes infinite disk space)
+    while (f->c.start != f->c.end) {
+        ssize_t r = write(f->fd, f->c.buf, f->c.end - f->c.start);
+        if (r > 0) f->c.start += r;
+    }
+
+    return 0;
 }
 
 
@@ -320,13 +229,13 @@ int io61_flush(io61_file* f) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
-    off_t r = lseek(f->fd, (off_t) off, SEEK_SET);
-    // Ignore the returned offset unless it’s an error.
-    if (r == -1) {
-        return -1;
-    } else {
-        return 0;
-    }
+
+    // Entry errors
+    if(!f->seekable || f->fd < 0 || off < 0 || (f->mode == O_RDONLY && f->mappable && off > f->size)) return -1;
+
+    // Seek
+    f->cursor = off;
+    return 0;
 }
 
 
