@@ -4,20 +4,6 @@
 #include <climits>
 
 // io61.cc
-//    Debug info:
-//
-//    For test c1, run this in shell
-//      gdb --args cat61 -o outputs/out.txt inputs/text32k.txt
-//
-//    For test c8, put this into ".gdbinit":
-//      r <(cat inputs/text32k.txt) >> cat > outputs/out.txt
-//    then run:
-//      gdb cat61
-//
-//    For test cn3, put this into ".gdbinit":
-//      r < inputs/text32k.txt > outputs/c14.txt
-//    then run:
-//      gdb wreverse61
 
 
 // cache
@@ -25,31 +11,25 @@
 
 static const ssize_t BUFMAX = 4096;             // Buffer size (bytes)
 static const ssize_t OFFBUFMASK = BUFMAX - 1;   // Mask for `n % BUFMAX`
-struct alignas(32) cache {
-    off_t start = 0;                        // Cache's starting offset
-    off_t end = 0;                          // Cache's one-past-end offset
-    unsigned char* buf = new unsigned char[BUFMAX];
-                                            // Buffer object
-    
-    ~cache();                               // Destructor
+struct cache {
+    off_t start = 0;                            // Cache's starting offset
+    off_t end = 0;                              // Cache's one-past-end offset
+    unsigned char buf[BUFMAX];                  // Buffer object
 };
-cache::~cache() {
-    delete[] buf;
-}
 
 
 // io61_file
 //    Data structure for io61 file wrappers. Add your own stuff.
 
 struct alignas(64) io61_file {
-    int fd = -1;            // file descriptor
-    int mode;               // open mode (O_RDONLY or O_WRONLY)
-    off_t size = -1;        // file size
-    off_t cursor = 0;       // io61 file cursor (not kernel file pointer)
-    bool seekable = false;  // file seekability
-    bool mappable = false;  // file mappability
+    int fd = -1;                // file descriptor
+    int mode;                   // open mode (O_RDONLY or O_WRONLY)
+    off_t size = -1;            // file size
+    off_t cursor = 0;           // io61 file cursor (not kernel file pointer)
+    bool seekable = false;      // file seekability
+    bool mappable = false;      // file mappability
 
-    cache c;                // single-slot cache
+    cache c;                    // single-slot cache
 };
 
 
