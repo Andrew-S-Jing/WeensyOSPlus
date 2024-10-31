@@ -1,6 +1,7 @@
 #include "io61.hh"
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <climits>
 
 // io61.cc
@@ -22,14 +23,14 @@ struct cache {
 //    Data structure for io61 file wrappers. Add your own stuff.
 
 struct alignas(64) io61_file {
-    int fd = -1;                // file descriptor
-    int mode;                   // open mode (O_RDONLY or O_WRONLY)
-    off_t size = -1;            // file size
-    off_t cursor = 0;           // io61 file cursor (not kernel file pointer)
-    bool seekable = false;      // file seekability
-    bool mappable = false;      // file mappability
+    int fd = -1;                    // file descriptor
+    int mode;                       // open mode (O_RDONLY or O_WRONLY)
+    off_t size = -1;                // file size
+    off_t cursor = 0;               // file cursor (not kernel file pointer)
+    bool seekable = false;          // file seekability
 
-    cache c;                    // single-slot cache
+    unsigned char* map = nullptr;   // memory map pointer
+    cache c;                        // single-slot cache
 };
 
 
@@ -45,7 +46,11 @@ io61_file* io61_fdopen(int fd, int mode) {
     f->mode = mode;
     f->size = io61_filesize(f);
     f->seekable = lseek(f->fd, 0, SEEK_CUR) != -1;
-    f->mappable = f->size != -1;
+    if (f->mode == O_RDONLY && f->size >= 0) {
+        void* r = mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0);
+        if (r != MAP_FAILED) f->map = (unsigned char*) r;
+        assert(f->map);
+    }
     return f;
 }
 
@@ -55,7 +60,8 @@ io61_file* io61_fdopen(int fd, int mode) {
 
 int io61_close(io61_file* f) {
     io61_flush(f);
-    int r = close(f->fd);
+    int r = 0;
+    if (f->map) r = munmap(f->map, f->size);
     delete f;
     return r;
 }
@@ -66,6 +72,14 @@ int io61_close(io61_file* f) {
 //    which equals -1, on end of file or error.
 
 int io61_readc(io61_file* f) {
+
+    // Read mapped file
+    if (f->map && f->cursor >= 0 && f->cursor < f->size) {
+        if (f->mode == O_WRONLY) return -1;
+        return f->map[f->cursor++];
+    }
+
+    // Read unmapped file
     unsigned char c;
     return io61_read(f, &c, 1) == 1 ? c : EOF;
 }
@@ -82,6 +96,14 @@ int io61_readc(io61_file* f) {
 //    This is called a “short read.”
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
+
+    // Read mapped files
+    if (f->map && f->cursor >= 0 && f->cursor < f->size) {
+        if ((size_t) (f->size - f->cursor) < sz) sz = f->size - f->cursor;
+        memcpy(buf, f->map + f->cursor, sz);
+        f->cursor += sz;
+        return sz;
+    }
 
     // Entry errors
     if (f->mode == O_WRONLY || f->fd < 0) return -1;
@@ -155,7 +177,7 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
     while (npending != 0) {
 
         // Writing outside cache, update cache and buffer (not aligned to `BUFMAX`)
-        if (f->c.start == f->c.end || f->cursor < f->c.start || f->cursor >= f->c.start + BUFMAX || f->c.start < 0) {
+        if (f->cursor != f->c.end || f->cursor >= f->c.start + BUFMAX) {
             io61_flush(f);
             f->c.start = f->cursor;
             if (f->seekable && f->c.start != f->c.end) lseek(f->fd, f->c.start, SEEK_SET);
@@ -211,7 +233,7 @@ int io61_flush(io61_file* f) {
 int io61_seek(io61_file* f, off_t off) {
 
     // Entry errors
-    if(!f->seekable || f->fd < 0 || off < 0 || (f->mode == O_RDONLY && f->mappable && off > f->size)) return -1;
+    if(!f->seekable || f->fd < 0 || off < 0 || (f->mode == O_RDONLY && f->map && off > f->size)) return -1;
 
     // Seek
     f->cursor = off;
