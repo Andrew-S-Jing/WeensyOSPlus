@@ -89,6 +89,7 @@ ssize_t fill(io61_file* f) {
         else if (errno != EINTR && errno != EAGAIN) return -1;
     }
 
+    // Update cache
     f->c.end = f->c.start + nfilled;
     return nfilled;
 }
@@ -184,7 +185,22 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on error.
 
 int io61_writec(io61_file* f, int c) {
-    return -(io61_write(f, (unsigned char*) &c, 1) != 1);
+
+    // Entry errors
+    if (f->mode == O_RDONLY || f->fd < 0) return -1;
+
+    // Writing outside buffer, update cache and buffer (not aligned to `BUFMAX`)
+    if (f->cursor < f->c.start || f->cursor > f->c.end || f->cursor > f->c.start + BUFMAX) {
+        io61_flush(f);
+        f->c.start = f->cursor;
+        if (f->seekable && f->c.start != f->c.end) lseek(f->fd, f->c.start, SEEK_SET);
+        f->c.end = f->c.start;
+    }
+
+    // Write to and update cache
+    f->c.buf[f->cursor++ - f->c.start] = c;
+    if (f->cursor > f->c.end) f->c.end = f->cursor;
+    return 0;
 }
 
 
@@ -260,6 +276,7 @@ int io61_flush(io61_file* f) {
         if (r > 0) nflushed += r;
     }
 
+    // Reset cache
     f->c.start = f->c.end;
     return 0;
 }
