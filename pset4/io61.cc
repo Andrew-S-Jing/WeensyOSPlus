@@ -67,6 +67,33 @@ int io61_close(io61_file* f) {
 }
 
 
+// fill(f)
+//    Internal function. Fills cache associated with `f`, aligned to `BUFMAX`.
+//    Returns number of bytes filled on success and `-1` on failure.
+
+ssize_t fill(io61_file* f) {
+
+    // Locals
+    f->c.start = f->cursor - (f->cursor & OFFBUFMASK);
+    assert (f->c.start >= 0 && (f->c.start < f->size || f->size < 0));
+    ssize_t nfilled = 0;
+
+    // Seek if needed
+    if (f->seekable && f->c.start != f->c.end) lseek(f->fd, f->c.start, SEEK_SET);
+
+    // Main loop
+    while (nfilled != BUFMAX) {
+        ssize_t r = read(f->fd, f->c.buf + nfilled, BUFMAX - nfilled);
+        if (r == 0) break;  // EOF
+        else if (r > 0) nfilled += r;
+        else if (errno != EINTR && errno != EAGAIN) return -1;
+    }
+
+    f->c.end = f->c.start + nfilled;
+    return nfilled;
+}
+
+
 // io61_readc(f)
 //    Reads a single (unsigned) byte from `f` and returns it. Returns EOF,
 //    which equals -1, on end of file or error.
@@ -81,7 +108,10 @@ int io61_readc(io61_file* f) {
 
     // Read unmapped file
     unsigned char c;
-    return io61_read(f, &c, 1) == 1 ? c : EOF;
+    ssize_t r = io61_read(f, &c, 1);
+    if (r == 1) return c;
+    else if (r == 0) errno = 0;
+    return -1;
 }
 
 
@@ -120,14 +150,10 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
     while (npending != 0) {
 
         // Reading outside cache, update cache and buffer (aligned to `BUFMAX`)
-        if (f->cursor < f->c.start || f->cursor >= f->c.end || f->c.start < 0) {
-            f->c.start = f->cursor - (f->cursor & OFFBUFMASK);
-            assert (f->c.start >= 0 && (f->c.start < f->size || f->size < 0));
-            if (f->seekable && f->c.start != f->c.end) lseek(f->fd, f->c.start, SEEK_SET);
-            ssize_t r = read(f->fd, f->c.buf, BUFMAX);
-            assert(r != -1);
+        if (f->cursor < f->c.start || f->cursor >= f->c.end){
+            ssize_t r = fill(f);
             if (r == 0) break;      // EOF
-            f->c.end = f->c.start + r;
+            else if (r == -1) return -1;
         }
 
         // Calculate number of bytes to copy from current buffer
@@ -217,13 +243,13 @@ int io61_flush(io61_file* f) {
     if (f->mode == O_RDONLY || f->c.start == f->c.end) return 0;
 
     // Locals
-    unsigned char* cbufcursor = f->c.buf;
-    unsigned char* cbufend = cbufcursor + f->c.end - f->c.start;
+    ssize_t sz = f->c.end - f->c.start;
+    ssize_t nflushed = 0;
 
     // Main loop (assumes infinite disk space)
-    while (cbufcursor != cbufend) {
-        ssize_t r = write(f->fd, cbufcursor, cbufend - cbufcursor);
-        if (r > 0) cbufcursor += r;
+    while (nflushed != sz) {
+        ssize_t r = write(f->fd, f->c.buf + nflushed, sz - nflushed);
+        if (r > 0) nflushed += r;
     }
 
     f->c.start = f->c.end;
