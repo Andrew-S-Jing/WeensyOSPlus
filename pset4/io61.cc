@@ -46,10 +46,10 @@ io61_file* io61_fdopen(int fd, int mode) {
     f->mode = mode;
     f->size = io61_filesize(f);
     f->seekable = lseek(f->fd, 0, SEEK_CUR) != -1;
+    // f->map
     if (f->mode == O_RDONLY && f->size >= 0) {
         void* r = mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0);
         if (r != MAP_FAILED) f->map = (unsigned char*) r;
-        assert(f->map);
     }
     return f;
 }
@@ -79,7 +79,8 @@ ssize_t fill(io61_file* f) {
     ssize_t nfilled = 0;
 
     // Seek if needed
-    if (f->seekable && f->c.start != f->c.end) lseek(f->fd, f->c.start, SEEK_SET);
+    if (f->seekable && f->c.start != f->c.end)
+        lseek(f->fd, f->c.start, SEEK_SET);
 
     // Main loop
     while (nfilled != BUFMAX) {
@@ -146,13 +147,16 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
     // Entry errors
     if (f->mode == O_WRONLY || f->fd < 0) return -1;
-    assert(f->cursor >= 0 && f->c.start <= f->c.end && f->c.end - f->c.start <= BUFMAX);
+    assert(f->cursor >= 0
+               && f->c.start <= f->c.end
+               && f->c.end - f->c.start <= BUFMAX);
 
     // Catch size 0 and EOF reads early
     if (sz == 0 || f->cursor == f->size) return 0;
 
     // Locals
-    if (f->size >= 0 && (size_t) (f->size - f->cursor) < sz) sz = f->size - f->cursor;
+    if (f->size >= 0 && (size_t) (f->size - f->cursor) < sz)
+        sz = f->size - f->cursor;
     ssize_t npending = sz;
 
     // Main loop
@@ -190,10 +194,13 @@ int io61_writec(io61_file* f, int c) {
     if (f->mode == O_RDONLY || f->fd < 0) return -1;
 
     // Writing outside buffer, update cache and buffer (not aligned to `BUFMAX`)
-    if (f->cursor < f->c.start || f->cursor > f->c.end || f->cursor > f->c.start + BUFMAX) {
+    if (f->cursor < f->c.start
+            || f->cursor > f->c.end
+            || f->cursor > f->c.start + BUFMAX) {
         io61_flush(f);
         f->c.start = f->cursor;
-        if (f->seekable && f->c.start != f->c.end) lseek(f->fd, f->c.start, SEEK_SET);
+        if (f->seekable && f->c.start != f->c.end)          // Seek if needed
+            lseek(f->fd, f->c.start, SEEK_SET);
         f->c.end = f->c.start;
     }
 
@@ -215,7 +222,9 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
     
     // Entry errors
     if (f->mode == O_RDONLY || f->fd < 0) return -1;
-    assert(f->cursor >= 0 && f->c.start <= f->c.end && f->c.end - f->c.start <= BUFMAX);
+    assert(f->cursor >= 0
+               && f->c.start <= f->c.end
+               && f->c.end - f->c.start <= BUFMAX);
 
     // Catch size 0 writes early
     if (sz == 0) return 0;
@@ -226,11 +235,12 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
     // Main loop
     while (npending != 0) {
 
-        // Writing outside cache, update cache and buffer (not aligned to `BUFMAX`)
+        // Writing outside cache, update cache/buffer (not aligned to `BUFMAX`)
         if (f->cursor != f->c.end || f->cursor >= f->c.start + BUFMAX) {
             io61_flush(f);
             f->c.start = f->cursor;
-            if (f->seekable && f->c.start != f->c.end) lseek(f->fd, f->c.start, SEEK_SET);
+            if (f->seekable && f->c.start != f->c.end)      // Seek if needed
+                lseek(f->fd, f->c.start, SEEK_SET);
             f->c.end = f->c.start;
         }
 
@@ -289,7 +299,11 @@ int io61_flush(io61_file* f) {
 int io61_seek(io61_file* f, off_t off) {
 
     // Entry errors
-    if(!f->seekable || f->fd < 0 || off < 0 || (f->mode == O_RDONLY && f->map && off > f->size)) return -1;
+    if (!f->seekable
+            || f->fd < 0
+            || off < 0
+            || (f->mode == O_RDONLY && f->map && off > f->size))
+        return -1;
 
     // Seek
     f->cursor = off;
