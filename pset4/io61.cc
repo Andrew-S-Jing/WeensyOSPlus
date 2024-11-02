@@ -84,7 +84,7 @@ ssize_t fill(io61_file* f) {
     // Main loop
     while (nfilled != BUFMAX) {
         ssize_t r = read(f->fd, f->c.buf + nfilled, BUFMAX - nfilled);
-        if (r == 0) break;  // EOF
+        if (r == 0) break;                      // EOF
         else if (r > 0) nfilled += r;
         else if (errno != EINTR && errno != EAGAIN) return -1;
     }
@@ -101,17 +101,24 @@ ssize_t fill(io61_file* f) {
 int io61_readc(io61_file* f) {
 
     // Read mapped file
-    if (f->map && f->cursor >= 0 && f->cursor < f->size) {
+    if (f->map) {
         if (f->mode == O_WRONLY) return -1;
+        if (f->cursor == f->size) {
+            errno = 0;
+            return -1;                          // EOF
+        }
         return f->map[f->cursor++];
     }
 
     // Read unmapped file
-    unsigned char c;
-    ssize_t r = io61_read(f, &c, 1);
-    if (r == 1) return c;
-    else if (r == 0) errno = 0;
-    return -1;
+    if (f->cursor < f->c.start || f->cursor >= f->c.end) {
+        ssize_t r = fill(f);
+        if (r < 1) {
+            if (r == 0) errno = 0;              // EOF
+            return -1;
+        }
+    }
+    return f->c.buf[f->cursor++ - f->c.start];
 }
 
 
@@ -128,7 +135,8 @@ int io61_readc(io61_file* f) {
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
     // Read mapped files
-    if (f->map && f->cursor >= 0 && f->cursor < f->size) {
+    if (f->map) {
+        if (f->cursor == f->size) return 0;     // EOF
         if ((size_t) (f->size - f->cursor) < sz) sz = f->size - f->cursor;
         memcpy(buf, f->map + f->cursor, sz);
         f->cursor += sz;
@@ -152,7 +160,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
         // Reading outside cache, update cache and buffer (aligned to `BUFMAX`)
         if (f->cursor < f->c.start || f->cursor >= f->c.end){
             ssize_t r = fill(f);
-            if (r == 0) break;      // EOF
+            if (r == 0) break;                  // EOF
             else if (r == -1) return -1;
         }
 
