@@ -75,6 +75,7 @@ ssize_t fill(io61_file* f) {
 
     // Locals
     f->c.start = f->cursor - (f->cursor & OFFBUFMASK);
+    assert (f->c.start >= 0 && (f->c.start < f->size || f->size < 0));
     ssize_t nfilled = 0;
 
     // Seek if needed
@@ -103,6 +104,7 @@ int io61_readc(io61_file* f) {
 
     // Read mapped file
     if (f->map) {
+        assert(f->cursor >= 0 && f->cursor <= f->size && f->size >= 0);
         if (f->mode == O_WRONLY) return -1;
         if (f->cursor == f->size) {
             errno = 0;
@@ -137,6 +139,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
     // Read mapped files
     if (f->map) {
+        assert(f->cursor >= 0 && f->cursor <= f->size && f->size >= 0);
         if (f->cursor == f->size) return 0;     // EOF
         if ((size_t) (f->size - f->cursor) < sz) sz = f->size - f->cursor;
         memcpy(buf, f->map + f->cursor, sz);
@@ -146,6 +149,9 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
     // Entry errors
     if (f->mode == O_WRONLY || f->fd < 0) return -1;
+    assert(f->cursor >= 0
+               && f->c.start <= f->c.end
+               && f->c.end - f->c.start <= BUFMAX);
 
     // Catch size 0 and EOF reads early
     if (sz == 0 || f->cursor == f->size) return 0;
@@ -188,11 +194,12 @@ int io61_writec(io61_file* f, int c) {
 
     // Entry errors
     if (f->mode == O_RDONLY || f->fd < 0) return -1;
+    assert(f->cursor >= 0);
 
     // Writing outside buffer, update cache and buffer (not aligned to `BUFMAX`)
     if (f->cursor < f->c.start
             || f->cursor > f->c.end
-            || f->cursor > f->c.start + BUFMAX) {
+            || f->cursor >= f->c.start + BUFMAX) {
         io61_flush(f);
         f->c.start = f->cursor;
         if (f->seekable && f->c.start != f->c.end)          // Seek if needed
@@ -218,6 +225,9 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
     
     // Entry errors
     if (f->mode == O_RDONLY || f->fd < 0) return -1;
+    assert(f->cursor >= 0
+               && f->c.start <= f->c.end
+               && f->c.end - f->c.start <= BUFMAX);
 
     // Catch size 0 writes early
     if (sz == 0) return 0;
@@ -271,6 +281,7 @@ int io61_flush(io61_file* f) {
 
     // Locals
     ssize_t sz = f->c.end - f->c.start;
+    assert (sz >= 0 && sz <= BUFMAX);
     ssize_t nflushed = 0;
 
     // Main loop (assumes infinite disk space)
