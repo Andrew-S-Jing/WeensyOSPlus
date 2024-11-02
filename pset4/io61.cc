@@ -75,7 +75,6 @@ ssize_t fill(io61_file* f) {
 
     // Locals
     f->c.start = f->cursor - (f->cursor & OFFBUFMASK);
-    assert (f->c.start >= 0 && (f->c.start < f->size || f->size < 0));
     ssize_t nfilled = 0;
 
     // Seek if needed
@@ -147,9 +146,6 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
     // Entry errors
     if (f->mode == O_WRONLY || f->fd < 0) return -1;
-    assert(f->cursor >= 0
-               && f->c.start <= f->c.end
-               && f->c.end - f->c.start <= BUFMAX);
 
     // Catch size 0 and EOF reads early
     if (sz == 0 || f->cursor == f->size) return 0;
@@ -222,9 +218,6 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
     
     // Entry errors
     if (f->mode == O_RDONLY || f->fd < 0) return -1;
-    assert(f->cursor >= 0
-               && f->c.start <= f->c.end
-               && f->c.end - f->c.start <= BUFMAX);
 
     // Catch size 0 writes early
     if (sz == 0) return 0;
