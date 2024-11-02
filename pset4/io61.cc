@@ -306,7 +306,7 @@ int io61_seek(io61_file* f, off_t off) {
     if (!f->seekable
             || f->fd < 0
             || off < 0
-            || (f->mode == O_RDONLY && f->map && off > f->size))
+            || (f->map && off > f->size))
         return -1;
 
     // Seek
