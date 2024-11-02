@@ -10,7 +10,7 @@
 // cache
 //    General purpose cache struct
 
-static const ssize_t BUFMAX = 4096;             // Buffer size (bytes)
+static const ssize_t BUFMAX = 8192;             // Buffer size (bytes)
 static const ssize_t OFFBUFMASK = BUFMAX - 1;   // Mask for `n % BUFMAX`
 struct cache {
     off_t start = 0;                            // Cache's starting offset
@@ -216,12 +216,17 @@ int io61_flush(io61_file* f) {
     // Catch read-only files and clean caches early
     if (f->mode == O_RDONLY || f->c.start == f->c.end) return 0;
 
+    // Locals
+    unsigned char* cbufcursor = f->c.buf;
+    unsigned char* cbufend = cbufcursor + f->c.end - f->c.start;
+
     // Main loop (assumes infinite disk space)
-    while (f->c.start != f->c.end) {
-        ssize_t r = write(f->fd, f->c.buf, f->c.end - f->c.start);
-        if (r > 0) f->c.start += r;
+    while (cbufcursor != cbufend) {
+        ssize_t r = write(f->fd, cbufcursor, cbufend - cbufcursor);
+        if (r > 0) cbufcursor += r;
     }
 
+    f->c.start = f->c.end;
     return 0;
 }
 
