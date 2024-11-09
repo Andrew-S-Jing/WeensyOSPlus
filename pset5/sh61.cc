@@ -4,6 +4,7 @@
 #include <vector>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <iostream>
 
 // For the love of God
 #undef exit
@@ -65,11 +66,103 @@ command::~command() {
 //    PHASE 7: Handle redirections.
 
 void command::run() {
-    assert(this->pid == -1);
-    assert(this->args.size() > 0);
-    // Your code here!
 
-    fprintf(stderr, "command::run not done yet\n");
+    // Command should be freshly built
+    assert(this->pid == -1);
+    // Command BNF is never empty
+    assert(this->args.size() > 0);
+    
+    // Fork
+    pid_t fork_r = fork();
+
+    // Subshell
+    if (fork_r == 0) {
+        std::vector<char*> cstring_args;
+        for (auto elt : this->args) {
+            cstring_args.push_back(strdup(elt.c_str()));
+        }
+        cstring_args.push_back(nullptr);
+        int exec_r = execvp(cstring_args[0], cstring_args.data());
+        assert(exec_r == -1);
+        _exit(EXIT_FAILURE);
+    
+    // Shell
+    } else if (fork_r != -1) {
+        this->pid = fork_r;
+
+    // Error
+    } else {
+        std::cerr << "command::run: failed fork"; 
+    }
+}
+
+
+// run_pipeline(pipeline)
+//    Run the command *pipeline* contained in `section`.
+//    Returns exit status of last command or `-1` on abnormal exit.
+
+int run_pipeline(shell_parser& pipe) {
+
+    // Pipeline BNF is never empty
+    auto comm = pipe.first_command();
+    assert(comm);
+
+    int command_r;
+
+    // **Pipes not implemented yet**
+    // Run all commands in the pipeline
+    while (comm) {
+
+        // Build command struct
+        command* c = new command;
+        auto tok = pipe.first_token();
+        while (tok) {
+            c->args.push_back(tok.str());
+            tok.next();
+        }
+
+        // Attempt to run command
+        c->run();
+
+        // Wait on successfully attempted run
+        if (c->pid != -1)
+            waitpid(c->pid, &command_r, WAIT_MYPGRP);
+        
+        delete c;
+        comm.next_command();
+    }
+    return WIFEXITED(command_r) ? WEXITSTATUS(command_r) : -1;
+}
+
+
+// run_conditional(cond)
+//    Run the *conditional* contained in `section`.
+
+void run_conditional(shell_parser& cond) {
+
+    // Conditional BNF is never empty
+    auto ppln = cond.first_pipeline();
+    assert(ppln);
+
+    // Always run the first pipeline
+    bool cond_r = run_pipeline(ppln) == 0;
+    int op = ppln.op();
+    ppln.next_pipeline();
+
+    // Run post-conditional pipelines
+    while (ppln) {
+        // If `true && next`, evaluate `next`
+        if (op == TYPE_AND && cond_r)
+            cond_r &= run_pipeline(ppln) == 0;
+
+        // If `false || next`, evaluate `next`
+        else if (op == TYPE_OR && !cond_r)
+            cond_r |= run_pipeline(ppln) == 0;
+        
+        // Iterate
+        op = ppln.op();
+        ppln.next_pipeline();
+    }
 }
 
 
@@ -98,14 +191,15 @@ void command::run() {
 //       This may require adding another call to `fork()`!
 
 void run_list(shell_parser sec) {
-    command* c = new command;
-    auto tok = sec.first_token();
-    while (tok) {
-        c->args.push_back(tok.str());
-        tok.next();
+
+    // Commandline BNF **can** be empty
+    auto cond = sec.first_conditional();
+
+    // Run any conditionals
+    while (cond) {
+        run_conditional(cond);
+        cond.next_conditional();
     }
-    c->run();
-    delete c;
 }
 
 
