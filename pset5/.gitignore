@@ -3,3 +3,5 @@
 cmdline
 out
 sh61
+.gdbinit
+s.out
