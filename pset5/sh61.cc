@@ -185,7 +185,8 @@ void command::run() {
 
     // Fork error
     } else {
-        std::cerr << "command::run: failed fork"; 
+        std::cerr << "command::run: failed fork";
+        abort();
     }
 }
 
@@ -385,7 +386,8 @@ void run_list(shell_parser sec) {
 
             // Fork error
             } else {
-                std::cerr << "command::run: failed fork"; 
+                std::cerr << "command::run: failed fork";
+                abort();
             }
 
         // Regular processes for singletons and `;` operators
