@@ -64,12 +64,12 @@ long fd_count() {
 }
 
 
-// fd_remap(newfd, oldfd)
-//    Remap `oldfd` to `newfd`s file, respecting fd hygiene.
+// fd_remap(src, dst)
+//    Remap `dst` to `src`s file, respecting fd hygiene.
 
-void fd_remap(int newfd, int oldfd) {
-    dup2(newfd, oldfd);
-    close(newfd);
+void fd_remap(int src, int dst) {
+    dup2(src, dst);
+    close(src);
 }
 
 
