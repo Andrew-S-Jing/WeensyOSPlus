@@ -13,10 +13,10 @@
 #define exit __DO_NOT_CALL_EXIT__READ_PROBLEM_SET_DESCRIPTION__
 
 
-// zombies
-//    Global set of zombie processes' PIDs
+// subshells
+//    Global set of subshell PIDs
 
-std::set<pid_t> zombies;
+std::set<pid_t> subshells;
 
 
 // struct command
@@ -288,7 +288,7 @@ void run_list(shell_parser sec) {
 
             // Main shell
             } else if (fork_r != -1) {
-                zombies.insert(fork_r);
+                subshells.insert(fork_r);
 
             // Fork error
             } else {
@@ -366,8 +366,8 @@ int main(int argc, char* argv[]) {
         }
 
         // Handle zombie processes and/or interrupt requests
-        // Reap zombie processes
-        for (auto zombie : zombies) waitpid(zombie, nullptr, WNOHANG);
+        // Reap zombie processes (free terminated subshells' process entries)
+        for (auto subshell : subshells) waitpid(subshell, nullptr, WNOHANG);
     }
 
     return 0;
