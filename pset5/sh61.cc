@@ -107,9 +107,7 @@ void command::run() {
 
         // Build args vector
         std::vector<char*> cstring_args;
-        for (auto elt : this->args) {
-            cstring_args.push_back(strdup(elt.c_str()));
-        }
+        for (auto elt : this->args) cstring_args.push_back(strdup(elt.c_str()));
         cstring_args.push_back(nullptr);
 
         // Set up pipes if applicable
@@ -226,12 +224,13 @@ void run_conditional(shell_parser cond) {
     // Run post-conditional pipelines
     while (ppln) {
         // If `true && next`, evaluate `next`
-        if (op == TYPE_AND && cond_r)
+        if (op == TYPE_AND && cond_r) {
             cond_r &= run_pipeline(ppln) == 0;
 
         // If `false || next`, evaluate `next`
-        else if (op == TYPE_OR && !cond_r)
+        } else if (op == TYPE_OR && !cond_r) {
             cond_r |= run_pipeline(ppln) == 0;
+        }
         
         // Iterate
         op = ppln.op();
@@ -271,7 +270,27 @@ void run_list(shell_parser sec) {
 
     // Run any conditionals
     while (cond) {
-        run_conditional(cond);
+
+        // Background processes for `&` operators
+        if (cond.op() == TYPE_BACKGROUND) {
+            pid_t fork_r = fork();
+
+            // Subshell
+            if (fork_r == 0) {
+                run_conditional(cond);
+                _exit(0);
+
+            // Fork error
+            } else if (fork_r == -1) {
+                std::cerr << "command::run: failed fork"; 
+            }
+
+        // Regular processes for singletons and `;` operators
+        } else {
+            run_conditional(cond);
+        }
+
+        // Iterate
         cond.next_conditional();
     }
 }
