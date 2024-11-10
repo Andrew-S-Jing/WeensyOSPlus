@@ -13,6 +13,12 @@
 #define exit __DO_NOT_CALL_EXIT__READ_PROBLEM_SET_DESCRIPTION__
 
 
+// zombies
+//    Global set of zombie processes' PIDs
+
+std::set<pid_t> zombies;
+
+
 // struct command
 //    Data structure describing a command. Add your own stuff.
 
@@ -149,7 +155,7 @@ int run_pipeline(shell_parser ppln) {
 
     // Locals
     int command_r;
-    std::set<int> children;
+    std::set<pid_t> children;
     int next_infd = -1;
     int initial_fds = fd_count();
 
@@ -280,8 +286,12 @@ void run_list(shell_parser sec) {
                 run_conditional(cond);
                 _exit(EXIT_SUCCESS);
 
+            // Main shell
+            } else if (fork_r != -1) {
+                zombies.insert(fork_r);
+
             // Fork error
-            } else if (fork_r == -1) {
+            } else {
                 std::cerr << "command::run: failed fork"; 
             }
 
@@ -356,7 +366,8 @@ int main(int argc, char* argv[]) {
         }
 
         // Handle zombie processes and/or interrupt requests
-        // Your code here!
+        // Reap zombie processes
+        for (auto zombie : zombies) waitpid(zombie, nullptr, WNOHANG);
     }
 
     return 0;
