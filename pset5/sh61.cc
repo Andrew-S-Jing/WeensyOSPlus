@@ -102,7 +102,7 @@ void command::run() {
     // Fork
     pid_t fork_r = fork();
 
-    // Subshell
+    // Child
     if (fork_r == 0) {
 
         // Build args vector
@@ -125,11 +125,11 @@ void command::run() {
         assert(exec_r == -1);
         _exit(EXIT_FAILURE);
     
-    // Shell
+    // Parent
     } else if (fork_r != -1) {
         this->pid = fork_r;
 
-    // Error
+    // Fork error
     } else {
         std::cerr << "command::run: failed fork"; 
     }
