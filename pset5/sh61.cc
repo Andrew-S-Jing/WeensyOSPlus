@@ -278,7 +278,7 @@ void run_list(shell_parser sec) {
             // Subshell
             if (fork_r == 0) {
                 run_conditional(cond);
-                _exit(0);
+                _exit(EXIT_SUCCESS);
 
             // Fork error
             } else if (fork_r == -1) {
