@@ -12,6 +12,10 @@
 #undef exit
 #define exit __DO_NOT_CALL_EXIT__READ_PROBLEM_SET_DESCRIPTION__
 
+#define L_HOINKY 0
+#define R_HOINKY 1
+#define R2_HOINKY 2
+
 
 // subshells
 //    Global set of subshell PIDs
@@ -22,8 +26,13 @@ std::set<pid_t> subshells;
 // struct command
 //    Data structure describing a command. Add your own stuff.
 
+struct redirection {
+    int rtype;                  // type of redirection operator as defined above
+    std::string file;           // filename
+};
 struct command {
     std::vector<std::string> args;
+    std::vector<redirection> redirections;
     pid_t pid = -1;             // process ID running this command, -1 if none
 
     int infd = STDIN_FILENO;    // FD to map `STDIN_FILENO` onto
@@ -124,6 +133,46 @@ void command::run() {
             fd_remap(this->outpipe[1], STDOUT_FILENO);
         } else assert(this->outpipe[0] == -1);
 
+        // Set up redirections if applicable (redirections will shadow pipes)
+        for (auto re : redirections) {
+            assert(re.rtype == L_HOINKY
+                       || re.rtype == R_HOINKY
+                       || re.rtype == R2_HOINKY);
+            
+            int direction, redirection;
+
+            // Input redirection setup
+            if (re.rtype == L_HOINKY) {
+                direction = STDIN_FILENO;
+                redirection = openat(AT_FDCWD, re.file.c_str(), O_RDONLY);
+
+            // Output/error redirection setup
+            } else {
+                if (re.rtype == R_HOINKY) direction = STDOUT_FILENO;
+                else if (re.rtype == R2_HOINKY) direction = STDERR_FILENO;
+                else {
+                    std::cerr << "sh61: parser error: unknown redirection\n";
+                    _exit(EXIT_FAILURE);
+                }
+                int mode = S_IRUSR | S_IWUSR
+                         | S_IRGRP | S_IWGRP
+                         | S_IROTH | S_IWOTH;       // `mode == 00666`
+                redirection = openat(AT_FDCWD,
+                                     re.file.c_str(),
+                                     O_WRONLY | O_CREAT | O_TRUNC,
+                                     mode);
+            }
+
+            // Perform redirection
+            if (redirection == -1) {
+                std::cerr << "sh61: "
+                          << re.file.c_str()
+                          << ": No such file or directory\n";
+                _exit(EXIT_FAILURE);
+            }
+            fd_remap(redirection, direction);
+        }
+
         // Attempt execution
         int exec_r = execvp(cstring_args[0], cstring_args.data());
         assert(exec_r == -1);
@@ -147,6 +196,7 @@ void command::run() {
 //      Success:  exit status of last command in pipeline
 //      Fail:     `-1` on missing exit of last command in pipeline
 //                `-2` on failed pipe creation
+//                `-3` on syntax error
 
 int run_pipeline(shell_parser ppln) {
 
@@ -163,11 +213,50 @@ int run_pipeline(shell_parser ppln) {
     // Run all commands in the pipeline
     while (comm) {
 
+        // Command BNF is never empty
+        auto tok = comm.first_token();
+        assert(tok);
+
         // Build next command
         command* c = new command;
-        auto tok = comm.first_token();
         while (tok) {
-            c->args.push_back(tok.str());
+            int type = tok.type();
+
+            // Add any redirections
+            if (type == TYPE_REDIRECT_OP) {
+                int rtype;
+                if (tok.str() == "<") rtype = L_HOINKY;
+                else if (tok.str() == ">") rtype = R_HOINKY;
+                else if (tok.str() == "2>") rtype = R2_HOINKY;
+                else {
+                    std::cerr << "sh61: parser error: `"
+                              << tok.str()
+                              << "` parsed as `TYPE_REDIRECT_OP`\n";
+                    delete c;
+                    _exit(EXIT_FAILURE);
+                }
+                tok.next();
+                if (!tok || tok.type() != TYPE_NORMAL) {
+                    std::cerr << "sh61: syntax error near unexpected token `"
+                              << tok.str()
+                              << "`\n";
+                    delete c;
+                    return -3;
+                }
+                c->redirections.push_back({.rtype = rtype, .file = tok.str()});
+
+            // Add any args
+            } else if (type == TYPE_NORMAL) {
+                c->args.push_back(tok.str());
+            
+            // Parser error
+            } else {
+                std::cerr << "sh61: parser error: `"
+                          << tok.str()
+                          << "` found in command\n";
+                delete c;
+                _exit(EXIT_FAILURE);
+            }
             tok.next();
         }
 
@@ -179,7 +268,10 @@ int run_pipeline(shell_parser ppln) {
         if (comm.op() == TYPE_PIPE) {
             int pfds[2];
             int pipe_r = pipe(pfds);
-            if (pipe_r == -1) return -2;
+            if (pipe_r == -1) {
+                delete c;
+                return -2;
+            }
             c->outpipe[0] = next_infd = pfds[0];
             c->outpipe[1] = pfds[1];
         }
