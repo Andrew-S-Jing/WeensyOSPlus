@@ -101,7 +101,7 @@ void command::run() {
 //    Run the command *pipeline* contained in `section`.
 //    Returns exit status of last command or `-1` on abnormal exit.
 
-int run_pipeline(shell_parser& pipe) {
+int run_pipeline(shell_parser pipe) {
 
     // Pipeline BNF is never empty
     auto comm = pipe.first_command();
@@ -138,7 +138,7 @@ int run_pipeline(shell_parser& pipe) {
 // run_conditional(cond)
 //    Run the *conditional* contained in `section`.
 
-void run_conditional(shell_parser& cond) {
+void run_conditional(shell_parser cond) {
 
     // Conditional BNF is never empty
     auto ppln = cond.first_pipeline();
