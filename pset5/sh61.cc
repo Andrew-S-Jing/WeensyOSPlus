@@ -5,6 +5,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <iostream>
+#include <set>
+#include <filesystem>
 
 // For the love of God
 #undef exit
@@ -16,7 +18,12 @@
 
 struct command {
     std::vector<std::string> args;
-    pid_t pid = -1;      // process ID running this command, -1 if none
+    pid_t pid = -1;             // process ID running this command, -1 if none
+
+    int infd = STDIN_FILENO;    // FD to map `STDIN_FILENO` onto
+    int outpipe[2] = {-1, STDOUT_FILENO};
+                                // outbound pipe, `outpipe[0]` is read end
+                                //                `outpipe[1]` is write end
 
     command();
     ~command();
@@ -37,6 +44,26 @@ command::command() {
 //    This destructor function is called to delete a command.
 
 command::~command() {
+}
+
+
+// fd_count
+//    Returns number of open FDs in current process.
+//    Only used for assertions and debugging.
+//    See citation: `fdcount`
+
+long fd_count() {
+  return std::distance(std::filesystem::directory_iterator("/proc/self/fd"),
+                       std::filesystem::directory_iterator{});
+}
+
+
+// fd_remap(newfd, oldfd)
+//    Remap `oldfd` to `newfd`s file, respecting fd hygiene.
+
+void fd_remap(int newfd, int oldfd) {
+    dup2(newfd, oldfd);
+    close(newfd);
 }
 
 
@@ -77,11 +104,23 @@ void command::run() {
 
     // Subshell
     if (fork_r == 0) {
+
+        // Build args vector
         std::vector<char*> cstring_args;
         for (auto elt : this->args) {
             cstring_args.push_back(strdup(elt.c_str()));
         }
         cstring_args.push_back(nullptr);
+
+        // Set up pipes if applicable
+        if (this->infd != STDIN_FILENO) fd_remap(this->infd, STDIN_FILENO);
+        if (this->outpipe[1] != STDOUT_FILENO) {
+            assert(this->outpipe[0] != -1);
+            close(this->outpipe[0]);
+            fd_remap(this->outpipe[1], STDOUT_FILENO);
+        } else assert(this->outpipe[0] == -1);
+
+        // Attempt execution
         int exec_r = execvp(cstring_args[0], cstring_args.data());
         assert(exec_r == -1);
         _exit(EXIT_FAILURE);
@@ -99,38 +138,73 @@ void command::run() {
 
 // run_pipeline(pipeline)
 //    Run the command *pipeline* contained in `section`.
-//    Returns exit status of last command or `-1` on abnormal exit.
+//    Returns:
+//      Success:  exit status of last command in pipeline
+//      Fail:     `-1` on missing exit of last command in pipeline
+//                `-2` on failed pipe creation
 
-int run_pipeline(shell_parser pipe) {
+int run_pipeline(shell_parser ppln) {
 
     // Pipeline BNF is never empty
-    auto comm = pipe.first_command();
+    auto comm = ppln.first_command();
     assert(comm);
 
+    // Locals
     int command_r;
+    std::set<int> children;
+    int next_infd = -1;
+    int initial_fds = fd_count();
 
-    // **Pipes not implemented yet**
     // Run all commands in the pipeline
     while (comm) {
 
-        // Build command struct
+        // Build next command
         command* c = new command;
-        auto tok = pipe.first_token();
+        auto tok = comm.first_token();
         while (tok) {
             c->args.push_back(tok.str());
             tok.next();
         }
 
+        // Build pipes if applicable
+        if (next_infd != -1) {
+            c->infd = next_infd;
+            next_infd = -1;
+        }
+        if (comm.op() == TYPE_PIPE) {
+            int pfds[2];
+            int pipe_r = pipe(pfds);
+            if (pipe_r == -1) return -2;
+            c->outpipe[0] = next_infd = pfds[0];
+            c->outpipe[1] = pfds[1];
+        }
+
         // Attempt to run command
         c->run();
 
-        // Wait on successfully attempted run
-        if (c->pid != -1)
-            waitpid(c->pid, &command_r, WAIT_MYPGRP);
+        // Clean pipes
+        if (c->infd != STDIN_FILENO) close(c->infd);
+        if (c->outpipe[1] != STDOUT_FILENO) close(c->outpipe[1]);
+        else assert(c->outpipe[0] == -1);
+
+        // Add successfully created child to set
+        if (c->pid != -1) children.insert(c->pid);
         
+        // Free command
         delete c;
+
+        // Iterate
         comm.next_command();
     }
+
+    // Check pipe hygiene
+    int current_fds = fd_count();
+    assert(initial_fds == current_fds);
+
+    // Wait for all commands in pipeline to exit
+    for (auto child : children) waitpid(child, &command_r, WAIT_MYPGRP);
+
+    // Return is based on **last** command
     return WIFEXITED(command_r) ? WEXITSTATUS(command_r) : -1;
 }
 
