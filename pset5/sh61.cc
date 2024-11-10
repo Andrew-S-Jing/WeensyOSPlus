@@ -127,6 +127,7 @@ void command::run() {
         // Attempt execution
         int exec_r = execvp(cstring_args[0], cstring_args.data());
         assert(exec_r == -1);
+        std::cerr << cstring_args[0] << ": command not found\n";
         _exit(EXIT_FAILURE);
     
     // Parent
