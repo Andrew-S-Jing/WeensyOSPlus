@@ -186,11 +186,6 @@ void command::run() {
     // Child
     if (fork_r == 0) {
 
-        // Build args vector
-        std::vector<char*> cstring_args;
-        for (auto elt : this->args) cstring_args.push_back(strdup(elt.c_str()));
-        cstring_args.push_back(nullptr);
-
         // Set up pipes if applicable
         if (this->infd != STDIN_FILENO) fd_remap(this->infd, STDIN_FILENO);
         if (this->outpipe[1] != STDOUT_FILENO) {
@@ -237,9 +232,17 @@ void command::run() {
             fd_remap(redirection, direction);
         }
 
+        // Build args vector
+        std::vector<char*> cstring_args;
+        for (auto elt : this->args) cstring_args.push_back(strdup(elt.c_str()));
+        cstring_args.push_back(nullptr);
+
         // Attempt execution
         int exec_r = execvp(cstring_args[0], cstring_args.data());
+
+        // Failed `execvp`
         assert(exec_r == -1);
+        for (auto cstring : cstring_args) free(cstring);    // `strdup` allocs
         std::cerr << cstring_args[0] << ": command not found\n";
         _exit(127);                     // Command not found
     
@@ -360,10 +363,8 @@ void run_pipeline(shell_parser ppln) {
         // Add child or cd execution to vector
         children.push_back(c->pid);
         
-        // Free command
-        delete c;
-
         // Iterate
+        delete c;
         comm.next_command();
     }
 
