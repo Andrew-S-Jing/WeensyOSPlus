@@ -34,12 +34,8 @@
 #define ERR_FORK -4
 #define ERR_PIPE -5
 #define ERR_PARSE -6
-
-
-// last_exit
-//    Exit status of the last commandline execution
-
-int last_exit;
+// Some `last_exit` assignments are unused but may make future features easier
+int last_exit;                          //Exit status of the last pipeline
 
 
 // subshells
@@ -220,10 +216,8 @@ void command::run() {
             } else {
                 if (re.rtype == R_HOINKY) direction = STDOUT_FILENO;
                 else if (re.rtype == R2_HOINKY) direction = STDERR_FILENO;
-                else {
-                    std::cerr << "sh61: syntax error: unknown redirection\n";
-                    _exit(2);                       // Misuse of shell
-                }
+                else assert(false);                 // Should never reach
+                
                 int mode = S_IRUSR | S_IWUSR
                          | S_IRGRP | S_IWGRP
                          | S_IROTH | S_IWOTH;       // `mode == 00666`
