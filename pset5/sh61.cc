@@ -242,8 +242,8 @@ void command::run() {
 
         // Failed `execvp`
         assert(exec_r == -1);
-        for (auto cstring : cstring_args) free(cstring);    // `strdup` allocs
         std::cerr << cstring_args[0] << ": command not found\n";
+        for (auto cstring : cstring_args) free(cstring);    // `strdup` allocs
         _exit(127);                     // Command not found
     
     // Parent
