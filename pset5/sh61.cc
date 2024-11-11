@@ -23,17 +23,17 @@
 #endif
 
 // Redirection operators
-#define L_HOINKY 0
-#define R_HOINKY 1
-#define R2_HOINKY 2
+#define L_HOINKY        0
+#define R_HOINKY        1
+#define R2_HOINKY       2
 
 // Internal exit statuses: 0-255 are reserved for system-defined statuses
-#define ERR_NOTEXIT -1
-#define ERR_SYNTAX -2
-#define ERR_UNKNOWN -3
-#define ERR_FORK -4
-#define ERR_PIPE -5
-#define ERR_PARSE -6
+#define ERR_NOTEXIT     -1
+#define ERR_SYNTAX      -2
+#define ERR_UNKNOWN     -3
+#define ERR_FORK        -4
+#define ERR_PIPE        -5
+#define ERR_PARSE       -6
 // Some `last_exit` assignments are unused but may make future features easier
 int last_exit;                          //Exit status of the last pipeline
 
@@ -98,9 +98,10 @@ long fd_count() {
 
 // fd_remap(src, dst)
 //    Remap `dst` to `src`s file, respecting fd hygiene.
+//    Only called by child processes preparing for command execution.
 
 void fd_remap(int src, int dst) {
-    dup2(src, dst);
+    if (dup2(src, dst) == -1) _exit(EXIT_FAILURE);
     close(src);
 }
 
@@ -108,27 +109,41 @@ void fd_remap(int src, int dst) {
 // COMMAND EXECUTION
 
 // command::run()
-//    Creates a single child process running the command in `this`, and
-//    sets `this->pid` to the pid of the child process.
+//    Run the command represented by `this`.
 //
-//    If a child process cannot be created, this function should call
-//    `_exit(EXIT_FAILURE)` (that is, `_exit(1)`) to exit the containing
-//    shell or subshell. If this function returns to its caller,
-//    `this->pid > 0` must always hold.
+//    If returning, sets `this->pid` to:
+//      child's PID for normal commands
+//      current PID for "cd" commands
 //
-//    Note that this function must return to its caller *only* in the parent
-//    process. The code that runs in the child process must `execvp` and/or
-//    `_exit`.
+//    Sets global `last_exit` to:
+//      `EXIT_SUCCESS` or `EXIT_FAILURE` for "cd" commands
+//      `ERR_*` as defined above for parent errors
 //
-//    PHASE 1: Fork a child process and run the command using `execvp`.
-//       This will require creating a vector of `char*` arguments using
-//       `this->args[N].c_str()`. Note that the last element of the vector
-//       must be a `nullptr`.
-//    PHASE 4: Set up a pipeline if appropriate. This may require creating a
-//       new pipe (`pipe` system call), and/or replacing the child process's
-//       standard input/output with parts of the pipe (`dup2` and `close`).
-//       Draw pictures!
-//    PHASE 7: Handle redirections.
+//
+//    NOTES:
+//      Creates a single child process running the command in `this`, and
+//      sets `this->pid` to the pid of the child process.
+//
+//      If a child process cannot be created, this function should call
+//      `_exit(fail)` (where `0 < fail <= 255`) to exit the containing
+//      shell or subshell. If this function returns to its caller,
+//      `this->pid > 0` must always hold.
+//
+//      `last_exit` should only be set in the parent process.
+//
+//      Note that this function must return to its caller *only* in the parent
+//      process. The code that runs in the child process must `execvp` and/or
+//      `_exit`.
+//
+//      PHASE 1: Fork a child process and run the command using `execvp`.
+//         This will require creating a vector of `char*` arguments using
+//         `this->args[N].c_str()`. Note that the last element of the vector
+//         must be a `nullptr`.
+//      PHASE 4: Set up a pipeline if appropriate. This may require creating a
+//         new pipe (`pipe` system call), and/or replacing the child process's
+//         standard input/output with parts of the pipe (`dup2` and `close`).
+//         Draw pictures!
+//      PHASE 7: Handle redirections.
 
 void command::run() {
 
@@ -232,7 +247,7 @@ void command::run() {
             fd_remap(redirection, direction);
         }
 
-        // Build args vector
+        // Build args vector (`strdup` will call `malloc`)
         std::vector<char*> cstring_args;
         for (auto elt : this->args) cstring_args.push_back(strdup(elt.c_str()));
         cstring_args.push_back(nullptr);
@@ -243,7 +258,7 @@ void command::run() {
         // Failed `execvp`
         assert(exec_r == -1);
         std::cerr << cstring_args[0] << ": command not found\n";
-        for (auto cstring : cstring_args) free(cstring);    // `strdup` allocs
+        for (auto cstring : cstring_args) free(cstring);    // free `strdup`s
         _exit(127);                     // Command not found
     
     // Parent
@@ -259,8 +274,18 @@ void command::run() {
 }
 
 
-// run_pipeline(pipeline)
-//    Run the command *pipeline* contained in `section`.
+// run_pipeline(ppln)
+//    Run pipeline in parser object `ppln`.
+//
+//    Sets global `last_exit` to:
+//      exit status of the last command in the pipeline (except for "cd"s)
+//      `ERR_*` as defined above for shell errors
+//
+//
+//    NOTES:
+//      PHASE 4: Change the loop to handle pipelines. Start all processes in
+//         the pipeline in parallel. The status of a pipeline is the status of
+//         its LAST command.
 
 void run_pipeline(shell_parser ppln) {
 
@@ -326,7 +351,7 @@ void run_pipeline(shell_parser ppln) {
             } else {
                 std::cerr << "sh61: parser error: `"
                           << tok.str()
-                          << "` found in command\n";
+                          << "` parsed in command\n";
                 delete c;
                 last_exit = ERR_PARSE;
                 abort();
@@ -380,7 +405,7 @@ void run_pipeline(shell_parser ppln) {
     }
 
     // Return based on the exit status of the **last** command in the pipeline
-    // `children.back() == pid`: last command was cd and `last_exit` already set
+    // `children.back() == pid` means last command was "cd", `last_exit` is set
     if (children.back() != pid) {
         last_exit = WIFEXITED(command_r) ? WEXITSTATUS(command_r) : ERR_NOTEXIT;
     }
@@ -388,7 +413,11 @@ void run_pipeline(shell_parser ppln) {
 
 
 // run_conditional(cond)
-//    Run the *conditional* contained in `section`.
+//    Run conditional in parser object `cond`.
+//    Only sets global `last_exit` on shell error (`ERR_*` as defined above).
+//
+//    NOTES:
+//      PHASE 3: Change the loop to handle conditional chains.
 
 void run_conditional(shell_parser cond) {
 
@@ -404,6 +433,16 @@ void run_conditional(shell_parser cond) {
 
     // Run post-conditional pipelines
     while (ppln) {
+
+        // Parser error
+        if (op && op != TYPE_AND && op != TYPE_OR) {
+            std::cerr << "sh61: parser error: `"
+                      << ppln.op_name()
+                      << "` parsed as conditional operator\n";
+            last_exit = ERR_PARSE;
+            abort();
+        }
+
         // If `true && next`, evaluate `next`
         if (op == TYPE_AND && cond_r) {
             run_pipeline(ppln);
@@ -425,34 +464,32 @@ void run_conditional(shell_parser cond) {
 }
 
 
-// run_list(c)
-//    Run the command *list* contained in `section`.
+// run_commandline(cmdl)
+//    Run commandline in parser object `cmdl`.
+//    Only sets global `last_exit` on shell error (`ERR_*` as defined above).
 //
-//    PHASE 1: Use `waitpid` to wait for the command started by `c->run()`
-//        to finish.
+//    NOTES:
+//      PHASE 1: Use `waitpid` to wait for the command started by `c->run()`
+//          to finish.
 //
-//    The remaining phases may require that you introduce helper functions
-//    (e.g., to process a pipeline), write code in `command::run`, and/or
-//    change `struct command`.
+//      The remaining phases may require that you introduce helper functions
+//      (e.g., to process a pipeline), write code in `command::run`, and/or
+//      change `struct command`.
 //
-//    It is possible, and not too ugly, to handle lists, conditionals,
-//    *and* pipelines entirely within `run_list`, but in general it is clearer
-//    to introduce `run_conditional` and `run_pipeline` functions that
-//    are called by `run_list`. It’s up to you.
+//      It is possible, and not too ugly, to handle commandlines, conditionals,
+//      *and* pipelines entirely within `run_commandline`, but in general it is
+//      clearer to introduce `run_conditional` and `run_pipeline` functions that
+//      are called by `run_commandline`. It’s up to you.
 //
-//    PHASE 2: Introduce a loop to run a list of commands, waiting for each
-//       to finish before going on to the next.
-//    PHASE 3: Change the loop to handle conditional chains.
-//    PHASE 4: Change the loop to handle pipelines. Start all processes in
-//       the pipeline in parallel. The status of a pipeline is the status of
-//       its LAST command.
-//    PHASE 5: Change the loop to handle background conditional chains.
-//       This may require adding another call to `fork()`!
+//      PHASE 2: Introduce a loop to run a sequence of conditionals, waiting
+//         for each to finish before going on to the next.
+//      PHASE 5: Change the loop to handle background conditional chains.
+//         This may require adding another call to `fork()`!
 
-void run_list(shell_parser sec) {
+void run_commandline(shell_parser cmdl) {
 
     // Commandline BNF **can** be empty
-    auto cond = sec.first_conditional();
+    auto cond = cmdl.first_conditional();
 
     // Run any conditionals
     while (cond) {
@@ -547,7 +584,7 @@ int main(int argc, char* argv[]) {
         // If a complete command line has been provided, run it
         bufpos = strlen(buf);
         if (bufpos == BUFSIZ - 1 || (bufpos > 0 && buf[bufpos - 1] == '\n')) {
-            run_list(shell_parser{buf});
+            run_commandline(shell_parser{buf});
             bufpos = 0;
             needprompt = 1;
         }
