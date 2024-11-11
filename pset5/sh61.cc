@@ -217,7 +217,7 @@ void command::run() {
                 if (re.rtype == R_HOINKY) direction = STDOUT_FILENO;
                 else if (re.rtype == R2_HOINKY) direction = STDERR_FILENO;
                 else assert(false);                 // Should never reach
-                
+
                 int mode = S_IRUSR | S_IWUSR
                          | S_IRGRP | S_IWGRP
                          | S_IROTH | S_IWOTH;       // `mode == 00666`
@@ -484,6 +484,11 @@ void run_list(shell_parser sec) {
         // Iterate
         cond.next_conditional();
     }
+
+    // Reap zombie processes (free terminated subshells' process entries)
+    for (auto it = subshells.begin(); it != subshells.end(); ++it) {
+        if (waitpid(*it, nullptr, WNOHANG) == *it) subshells.erase(it--);
+    }
 }
 
 
@@ -545,10 +550,6 @@ int main(int argc, char* argv[]) {
             bufpos = 0;
             needprompt = 1;
         }
-
-        // Handle zombie processes and/or interrupt requests
-        // Reap zombie processes (free terminated subshells' process entries)
-        for (auto subshell : subshells) waitpid(subshell, nullptr, WNOHANG);
     }
 
     return 0;
