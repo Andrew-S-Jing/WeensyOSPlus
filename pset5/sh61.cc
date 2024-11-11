@@ -12,9 +12,17 @@
 #undef exit
 #define exit __DO_NOT_CALL_EXIT__READ_PROBLEM_SET_DESCRIPTION__
 
+#define MORE_ERROR_MESSAGES false       // `false` for test-passing purposes
+
 #define L_HOINKY 0
 #define R_HOINKY 1
 #define R2_HOINKY 2
+
+
+// last_exit
+//    Exit status of the last commandline execution
+
+int last_exit;
 
 
 // subshells
@@ -113,7 +121,50 @@ void command::run() {
     assert(this->pid == -1);
     // Command BNF is never empty
     assert(this->args.size() > 0);
-    
+
+    // Handle cd commands
+    if (this->args.front() == "cd") {
+
+        // Setup
+        this->pid = getpid();
+        std::string target_directory;
+
+        // Command is just "cd"
+        if (this->args.size() == 1) {
+            target_directory = "/";
+
+        // Command is "cd `this->args[1]`"
+        } else if (this->args.size() == 2) {
+            target_directory = this->args[1];
+
+        // Too many args
+        } else {
+            std::cerr << "sh61: cd: too many arguments\n";
+            last_exit = 1;
+            return;
+        }
+
+        // Attempt cd
+        int chdir_r = chdir(target_directory.c_str());
+        if (chdir_r == 0) last_exit = 0;
+        else {
+            last_exit = 1;
+            // Give more error messaging if enabled
+            if (MORE_ERROR_MESSAGES) {
+                if (errno == ENOTDIR) {
+                    std::cerr << "sh61: cd: "
+                              << target_directory
+                              << ": Not a directory\n";
+                } else {
+                    std::cerr << "sh61: cd: "
+                              << target_directory
+                              << ": No such file or directory\n";
+                }
+            }
+        }
+        return;
+    }
+
     // Fork
     pid_t fork_r = fork();
 
@@ -185,7 +236,7 @@ void command::run() {
 
     // Fork error
     } else {
-        std::cerr << "command::run: failed fork";
+        std::cerr << "sh61: failed fork";
         abort();
     }
 }
@@ -207,7 +258,8 @@ int run_pipeline(shell_parser ppln) {
 
     // Locals
     int command_r;
-    std::set<pid_t> children;
+    pid_t pid = getpid();
+    std::vector<pid_t> children;
     int next_infd = -1;
     int initial_fds = fd_count();
 
@@ -225,6 +277,8 @@ int run_pipeline(shell_parser ppln) {
 
             // Add any redirections
             if (type == TYPE_REDIRECT_OP) {
+
+                // Determine redirection type
                 int rtype;
                 if (tok.str() == "<") rtype = L_HOINKY;
                 else if (tok.str() == ">") rtype = R_HOINKY;
@@ -236,6 +290,8 @@ int run_pipeline(shell_parser ppln) {
                     delete c;
                     _exit(EXIT_FAILURE);
                 }
+
+                // Get redirection filename
                 tok.next();
                 if (!tok || tok.type() != TYPE_NORMAL) {
                     std::cerr << "sh61: syntax error near unexpected token `"
@@ -279,14 +335,15 @@ int run_pipeline(shell_parser ppln) {
 
         // Attempt to run command
         c->run();
+        assert(c->pid != -1);
 
         // Clean pipes
         if (c->infd != STDIN_FILENO) close(c->infd);
         if (c->outpipe[1] != STDOUT_FILENO) close(c->outpipe[1]);
         else assert(c->outpipe[0] == -1);
 
-        // Add successfully created child to set
-        if (c->pid != -1) children.insert(c->pid);
+        // Add child or cd execution to vector
+        children.push_back(c->pid);
         
         // Free command
         delete c;
@@ -300,10 +357,14 @@ int run_pipeline(shell_parser ppln) {
     assert(initial_fds == current_fds);
 
     // Wait for all commands in pipeline to exit
-    for (auto child : children) waitpid(child, &command_r, WAIT_MYPGRP);
+    for (auto child : children) {
+        if (child != pid) waitpid(child, &command_r, WAIT_MYPGRP);
+    }
 
-    // Return is based on **last** command
-    return WIFEXITED(command_r) ? WEXITSTATUS(command_r) : -1;
+    // Return based on the exit status of the **last** command in the pipeline
+    // Also update `last_exit` as needed
+    if (children.back() == pid) return last_exit;
+    else return last_exit = WIFEXITED(command_r) ? WEXITSTATUS(command_r) : -1;
 }
 
 
@@ -336,6 +397,9 @@ void run_conditional(shell_parser cond) {
         op = ppln.op();
         ppln.next_pipeline();
     }
+
+    // Update `last_exit`
+    last_exit = cond_r;
 }
 
 
@@ -386,7 +450,7 @@ void run_list(shell_parser sec) {
 
             // Fork error
             } else {
-                std::cerr << "command::run: failed fork";
+                std::cerr << "sh61: failed fork";
                 abort();
             }
 
