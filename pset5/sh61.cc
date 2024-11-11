@@ -22,9 +22,18 @@
 #define MORE_ERROR_MESSAGES true
 #endif
 
+// Redirection operators
 #define L_HOINKY 0
 #define R_HOINKY 1
 #define R2_HOINKY 2
+
+// Internal exit statuses: 0-255 are reserved for system-defined statuses
+#define ERR_NOTEXIT -1
+#define ERR_SYNTAX -2
+#define ERR_UNKNOWN -3
+#define ERR_FORK -4
+#define ERR_PIPE -5
+#define ERR_PARSE -6
 
 
 // last_exit
@@ -150,15 +159,15 @@ void command::run() {
         // Too many args
         } else {
             std::cerr << "sh61: cd: too many arguments\n";
-            last_exit = 1;
+            last_exit = ERR_SYNTAX;
             return;
         }
 
         // Attempt cd
         int chdir_r = chdir(target_directory.c_str());
-        if (chdir_r == 0) last_exit = 0;
+        if (chdir_r == 0) last_exit = EXIT_SUCCESS;
         else {
-            last_exit = 1;
+            last_exit = EXIT_FAILURE;
             // Give more error messaging if enabled
             if (MORE_ERROR_MESSAGES) {
                 if (errno == ENOTDIR) {
@@ -212,8 +221,8 @@ void command::run() {
                 if (re.rtype == R_HOINKY) direction = STDOUT_FILENO;
                 else if (re.rtype == R2_HOINKY) direction = STDERR_FILENO;
                 else {
-                    std::cerr << "sh61: parser error: unknown redirection\n";
-                    _exit(EXIT_FAILURE);
+                    std::cerr << "sh61: syntax error: unknown redirection\n";
+                    _exit(2);                       // Misuse of shell
                 }
                 int mode = S_IRUSR | S_IWUSR
                          | S_IRGRP | S_IWGRP
@@ -238,7 +247,7 @@ void command::run() {
         int exec_r = execvp(cstring_args[0], cstring_args.data());
         assert(exec_r == -1);
         std::cerr << cstring_args[0] << ": command not found\n";
-        _exit(EXIT_FAILURE);
+        _exit(127);                     // Command not found
     
     // Parent
     } else if (fork_r != -1) {
@@ -247,6 +256,7 @@ void command::run() {
     // Fork error
     } else {
         std::cerr << "sh61: failed fork";
+        last_exit = ERR_FORK;
         abort();
     }
 }
@@ -254,13 +264,8 @@ void command::run() {
 
 // run_pipeline(pipeline)
 //    Run the command *pipeline* contained in `section`.
-//    Returns:
-//      Success:  exit status of last command in pipeline
-//      Fail:     `-1` on missing exit of last command in pipeline
-//                `-2` on failed pipe creation
-//                `-3` on syntax error
 
-int run_pipeline(shell_parser ppln) {
+void run_pipeline(shell_parser ppln) {
 
     // Pipeline BNF is never empty
     auto comm = ppln.first_command();
@@ -300,7 +305,8 @@ int run_pipeline(shell_parser ppln) {
                               << tok.str()
                               << "` parsed as `TYPE_REDIRECT_OP`\n";
                     delete c;
-                    _exit(EXIT_FAILURE);
+                    last_exit = ERR_PARSE;
+                    abort();
                 }
 
                 // Get redirection filename
@@ -310,7 +316,8 @@ int run_pipeline(shell_parser ppln) {
                               << tok.str()
                               << "`\n";
                     delete c;
-                    return -3;
+                    last_exit = ERR_SYNTAX;
+                    return;
                 }
                 c->redirections.push_back({.rtype = rtype, .file = tok.str()});
 
@@ -324,7 +331,8 @@ int run_pipeline(shell_parser ppln) {
                           << tok.str()
                           << "` found in command\n";
                 delete c;
-                _exit(EXIT_FAILURE);
+                last_exit = ERR_PARSE;
+                abort();
             }
             tok.next();
         }
@@ -339,7 +347,8 @@ int run_pipeline(shell_parser ppln) {
             int pipe_r = pipe(pfds);
             if (pipe_r == -1) {
                 delete c;
-                return -2;
+                last_exit = ERR_PIPE;
+                return;
             }
             c->outpipe[0] = next_infd = pfds[0];
             c->outpipe[1] = pfds[1];
@@ -376,9 +385,10 @@ int run_pipeline(shell_parser ppln) {
     }
 
     // Return based on the exit status of the **last** command in the pipeline
-    // Also update `last_exit` as needed
-    if (children.back() == pid) return last_exit;
-    else return last_exit = WIFEXITED(command_r) ? WEXITSTATUS(command_r) : -1;
+    // `children.back() == pid`: last command was cd and `last_exit` already set
+    if (children.back() != pid) {
+        last_exit = WIFEXITED(command_r) ? WEXITSTATUS(command_r) : ERR_NOTEXIT;
+    }
 }
 
 
@@ -392,7 +402,8 @@ void run_conditional(shell_parser cond) {
     assert(ppln);
 
     // Always run the first pipeline
-    bool cond_r = run_pipeline(ppln) == 0;
+    run_pipeline(ppln);
+    bool cond_r = last_exit == 0;
     int op = ppln.op();
     ppln.next_pipeline();
 
@@ -400,11 +411,13 @@ void run_conditional(shell_parser cond) {
     while (ppln) {
         // If `true && next`, evaluate `next`
         if (op == TYPE_AND && cond_r) {
-            cond_r &= run_pipeline(ppln) == 0;
+            run_pipeline(ppln);
+            cond_r &= last_exit == 0;
 
         // If `false || next`, evaluate `next`
         } else if (op == TYPE_OR && !cond_r) {
-            cond_r |= run_pipeline(ppln) == 0;
+            run_pipeline(ppln);
+            cond_r |= last_exit == 0;
         }
         
         // Iterate
@@ -456,7 +469,7 @@ void run_list(shell_parser sec) {
             // Subshell
             if (fork_r == 0) {
                 run_conditional(cond);
-                _exit(EXIT_SUCCESS);
+                _exit(last_exit != 0);
 
             // Main shell
             } else if (fork_r != -1) {
@@ -465,6 +478,7 @@ void run_list(shell_parser sec) {
             // Fork error
             } else {
                 std::cerr << "sh61: failed fork";
+                last_exit = ERR_FORK;
                 abort();
             }
 
