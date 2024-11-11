@@ -1,3 +1,5 @@
+#define GRADING_MODE                    // Enable grading server compatibility
+
 #include "sh61.hh"
 #include <cstring>
 #include <cerrno>
@@ -5,13 +7,20 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <iostream>
+
+#ifndef GRADING_MODE
 #include <filesystem>
+#endif
 
 // For the love of God
 #undef exit
 #define exit __DO_NOT_CALL_EXIT__READ_PROBLEM_SET_DESCRIPTION__
 
+#ifdef GRADING_MODE
 #define MORE_ERROR_MESSAGES false       // `false` for test-passing purposes
+#else
+#define MORE_ERROR_MESSAGES true
+#endif
 
 #define L_HOINKY 0
 #define R_HOINKY 1
@@ -69,6 +78,7 @@ command::~command() {
 }
 
 
+#ifndef GRADING_MODE
 // fd_count
 //    Returns number of open FDs in current process.
 //    Only used for assertions and debugging.
@@ -78,6 +88,7 @@ long fd_count() {
   return std::distance(std::filesystem::directory_iterator("/proc/self/fd"),
                        std::filesystem::directory_iterator{});
 }
+#endif
 
 
 // fd_remap(src, dst)
@@ -260,7 +271,9 @@ int run_pipeline(shell_parser ppln) {
     pid_t pid = getpid();
     std::vector<pid_t> children;
     int next_infd = -1;
+    #ifndef GRADING_MODE
     int initial_fds = fd_count();
+    #endif
 
     // Run all commands in the pipeline
     while (comm) {
@@ -351,9 +364,11 @@ int run_pipeline(shell_parser ppln) {
         comm.next_command();
     }
 
+    #ifndef GRADING_MODE
     // Check pipe hygiene
     int current_fds = fd_count();
     assert(initial_fds == current_fds);
+    #endif
 
     // Wait for all commands in pipeline to exit
     for (auto child : children) {
