@@ -5,7 +5,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <iostream>
-#include <set>
 #include <filesystem>
 
 // For the love of God
@@ -26,9 +25,9 @@ int last_exit;
 
 
 // subshells
-//    Global set of subshell PIDs
+//    Global vector of subshell PIDs
 
-std::set<pid_t> subshells;
+std::vector<pid_t> subshells;
 
 
 // struct command
@@ -446,7 +445,7 @@ void run_list(shell_parser sec) {
 
             // Main shell
             } else if (fork_r != -1) {
-                subshells.insert(fork_r);
+                subshells.push_back(fork_r);
 
             // Fork error
             } else {
