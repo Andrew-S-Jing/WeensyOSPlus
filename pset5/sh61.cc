@@ -106,6 +106,16 @@ void fd_remap(int src, int dst) {
 }
 
 
+// reap
+//     Reap zombie processes (free terminated subshells' process entries)
+
+void reap() {
+    for (auto it = subshells.begin(); it != subshells.end(); ++it) {
+        if (waitpid(*it, nullptr, WNOHANG) == *it) subshells.erase(it--);
+    }
+}
+
+
 // COMMAND EXECUTION
 
 // command::run()
@@ -522,11 +532,6 @@ void run_commandline(shell_parser cmdl) {
         // Iterate
         cond.next_conditional();
     }
-
-    // Reap zombie processes (free terminated subshells' process entries)
-    for (auto it = subshells.begin(); it != subshells.end(); ++it) {
-        if (waitpid(*it, nullptr, WNOHANG) == *it) subshells.erase(it--);
-    }
 }
 
 
@@ -584,11 +589,14 @@ int main(int argc, char* argv[]) {
         // If a complete command line has been provided, run it
         bufpos = strlen(buf);
         if (bufpos == BUFSIZ - 1 || (bufpos > 0 && buf[bufpos - 1] == '\n')) {
+            reap();
             run_commandline(shell_parser{buf});
             bufpos = 0;
             needprompt = 1;
+            reap();
         }
     }
 
+    reap();
     return 0;
 }
