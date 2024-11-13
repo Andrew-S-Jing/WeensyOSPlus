@@ -12,3 +12,4 @@ Grading notes (if any)
 
 Extra credit attempted (if any)
 -------------------------------
+Implemented `SIGINT` handling: kills current pipeline

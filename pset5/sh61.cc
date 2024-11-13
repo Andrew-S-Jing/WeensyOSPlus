@@ -34,8 +34,15 @@
 #define ERR_FORK        -4
 #define ERR_PIPE        -5
 #define ERR_PARSE       -6
+#define ERR_SETPGID     -7
 // Some `last_exit` assignments are unused but may make future features easier
 int last_exit;                          //Exit status of the last pipeline
+
+
+// is_foreground
+//    Global boolean marking foreground (main shell) or background (subshell)
+
+bool is_foreground = true;
 
 
 // subshells
@@ -54,7 +61,9 @@ struct redirection {
 struct command {
     std::vector<std::string> args;
     std::vector<redirection> redirections;
+
     pid_t pid = -1;             // process ID running this command, -1 if none
+    pid_t pgid = -1;            // group ID of this pipeline, -1 if not set yet
 
     int infd = STDIN_FILENO;    // FD to map `STDIN_FILENO` onto
     int outpipe[2] = {-1, STDOUT_FILENO};
@@ -101,13 +110,30 @@ long fd_count() {
 //    Only called by child processes preparing for command execution.
 
 void fd_remap(int src, int dst) {
-    if (dup2(src, dst) == -1) _exit(EXIT_FAILURE);
-    close(src);
+    if (dup2(src, dst) == -1) {
+        std::cerr << "sh61: failed dup2\n";
+        _exit(EXIT_FAILURE);
+    }
+    if (close(src) == -1) {
+        std::cerr << "sh61: failed close\n";
+        _exit(EXIT_FAILURE);
+    }
+}
+
+
+// is_fd_open(fd)
+//    Returns `true` if the file associated with `fd` is still open
+
+bool is_fd_open(int fd) {
+    while (fcntl(fd, F_GETFD) == -1) {
+        if (errno == EBADF) return false;
+    }
+    return true;
 }
 
 
 // reap
-//     Reap zombie processes (free terminated subshells' process entries)
+//    Reap zombie processes (free terminated subshells' process entries)
 
 void reap() {
     for (auto it = subshells.begin(); it != subshells.end(); ++it) {
@@ -211,6 +237,15 @@ void command::run() {
     // Child
     if (fork_r == 0) {
 
+        // Set child's PGID
+        int pgid_r;
+        if (this->pgid == -1) pgid_r = setpgrp();
+        else pgid_r = setpgid(0, this->pgid);
+        if (pgid_r == -1) {
+            std::cerr << "sh61: failed setpgid\n";
+            _exit(EXIT_FAILURE);
+        }
+
         // Set up pipes if applicable
         if (this->infd != STDIN_FILENO) fd_remap(this->infd, STDIN_FILENO);
         if (this->outpipe[1] != STDOUT_FILENO) {
@@ -218,6 +253,11 @@ void command::run() {
             close(this->outpipe[0]);
             fd_remap(this->outpipe[1], STDOUT_FILENO);
         } else assert(this->outpipe[0] == -1);
+
+        // Confirm pipeline is still active (handles `SIGINT` race condition)
+        if (!is_fd_open(STDIN_FILENO) || !is_fd_open(STDOUT_FILENO)) {
+            _exit(130);         // exit status for `SIGINT`
+        }
 
         // Set up redirections if applicable (redirections will shadow pipes)
         for (auto re : redirections) {
@@ -274,6 +314,13 @@ void command::run() {
     // Parent
     } else if (fork_r != -1) {
         this->pid = fork_r;
+        if (this->pgid == -1) this->pgid = this->pid;
+        if (setpgid(this->pid, this->pgid) == -1) {
+            std::cerr << "sh61: failed setpgid\n";
+            last_exit = ERR_SETPGID;
+            abort();
+        }
+
 
     // Fork error
     } else {
@@ -306,6 +353,7 @@ void run_pipeline(shell_parser ppln) {
     // Locals
     int command_r;
     pid_t pid = getpid();
+    pid_t pgid = -1;
     std::vector<pid_t> children;
     int next_infd = -1;
     #ifndef GRADING_MODE
@@ -386,6 +434,9 @@ void run_pipeline(shell_parser ppln) {
             c->outpipe[1] = pfds[1];
         }
 
+        // Set command to run in pipeline's program group
+        if (pgid != -1) c->pgid = pgid;
+
         // Attempt to run command
         c->run();
         assert(c->pid != -1);
@@ -397,7 +448,13 @@ void run_pipeline(shell_parser ppln) {
 
         // Add child or cd execution to vector
         children.push_back(c->pid);
-        
+
+        // Set pipeline's PGID
+        if (pgid == -1) {
+            pgid = c->pgid;
+            if (is_foreground) claim_foreground(pgid);
+        }
+
         // Iterate
         delete c;
         comm.next_command();
@@ -413,6 +470,8 @@ void run_pipeline(shell_parser ppln) {
     for (auto child : children) {
         if (child != pid) waitpid(child, &command_r, WAIT_MYPGRP);
     }
+
+    claim_foreground(0);
 
     // Return based on the exit status of the **last** command in the pipeline
     // `children.back() == pid` means last command was "cd", `last_exit` is set
@@ -510,6 +569,7 @@ void run_commandline(shell_parser cmdl) {
 
             // Subshell
             if (fork_r == 0) {
+                is_foreground = false;
                 run_conditional(cond);
                 _exit(last_exit != 0);
 
