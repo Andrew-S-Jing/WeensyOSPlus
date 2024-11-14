@@ -92,6 +92,10 @@ struct command {
     ~command();
 
     void run();
+
+    void pipe();                // Helpers to `run`
+    void redirect();
+    void cd();
 };
 
 
@@ -162,6 +166,139 @@ void reap() {
 
 // COMMAND EXECUTION
 
+// command::pipe()
+//    Set up pipes (if any) for this command
+
+void command::pipe() {
+    // Set child's PGID
+    int pgid_r;
+    if (this->pgid == -1) pgid_r = setpgrp();
+    else pgid_r = setpgid(0, this->pgid);
+    if (pgid_r == -1) {
+        std::cerr << "sh61: failed setpgid\n";
+        _exit(EXIT_FAILURE);
+    }
+
+    // Set up pipes if applicable
+    if (this->infd != STDIN_FILENO) fd_remap(this->infd, STDIN_FILENO);
+    if (this->outpipe[1] != STDOUT_FILENO) {
+        assert(this->outpipe[0] != -1);
+        close(this->outpipe[0]);
+        fd_remap(this->outpipe[1], STDOUT_FILENO);
+    } else assert(this->outpipe[0] == -1);
+
+    // Confirm pipeline is still active (handles `SIGINT` race condition)
+    if (!is_fd_open(STDIN_FILENO) || !is_fd_open(STDOUT_FILENO)) {
+        _exit(130);         // exit status for `SIGINT`
+    }
+}
+
+
+// command::redirect()
+//    Set up redirections (if any) for this command
+
+void command::redirect() {
+    // Set up redirections if applicable (redirections will shadow pipes)
+    for (auto re = this->redirections.begin();
+                re != this->redirections.end();
+                ++re) {
+
+        assert(re->dest == 0 || re->dest == 1 || re->dest == 2);
+        
+        int redir;
+
+        // Input redirection setup
+        if (re->dest == STDIN_FILENO) {
+            redir = openat(AT_FDCWD, re->file.c_str(), O_RDONLY);
+
+        // Output/error redirection setup
+        } else {
+            // Set mode for open
+            int mode = S_IRUSR | S_IWUSR
+                        | S_IRGRP | S_IWGRP
+                        | S_IROTH | S_IWOTH;       // `mode == 00666`
+            
+            // Set flags for open
+            int flags = O_WRONLY | O_CREAT;
+            if (re->append) flags |= O_APPEND;
+            else flags |= O_TRUNC;
+
+            // Open redirection file
+            redir = openat(AT_FDCWD, re->file.c_str(), flags, mode);
+        }
+
+        // Perform redirection
+        if (redir == -1) {
+            std::cerr << "sh61: "
+                        << re->file.c_str()
+                        << ": No such file or directory\n";
+            _exit(EXIT_FAILURE);
+        }
+        fd_remap(redir, re->dest);
+    }
+}
+
+
+// command:cd()
+//    Run special the command "cd"
+
+void command::cd() {
+
+    // Setup
+    this->pid = getpid();
+    std::string target_directory;
+    int temp_stdin = dup(STDIN_FILENO);
+    int temp_stdout = dup(STDOUT_FILENO);
+    int temp_stderr = dup(STDERR_FILENO);
+    this->redirect();
+
+    // Command is just "cd"
+    if (this->args.size() == 1) {
+        target_directory = "/";
+
+    // Command is "cd `this->args[1]`"
+    } else if (this->args.size() == 2) {
+        target_directory = this->args[1];
+
+    // Too many args
+    } else {
+        std::cerr << "sh61: cd: too many arguments\n";
+        last_exit = ERR_SYNTAX;
+
+        // Cleanup
+        fd_remap(temp_stdin, STDIN_FILENO);
+        fd_remap(temp_stdout, STDOUT_FILENO);
+        fd_remap(temp_stderr, STDERR_FILENO);
+
+        return;
+    }
+
+    // Attempt cd
+    int chdir_r = chdir(target_directory.c_str());
+    if (chdir_r == 0) last_exit = EXIT_SUCCESS;
+    else {
+        last_exit = EXIT_FAILURE;
+        // Give more error messaging if enabled
+        if (MORE_ERROR_MESSAGES) {
+            if (errno == ENOTDIR) {
+                std::cerr << "sh61: cd: "
+                            << target_directory
+                            << ": Not a directory\n";
+            } else {
+                std::cerr << "sh61: cd: "
+                            << target_directory
+                            << ": No such file or directory\n";
+            }
+        }
+    }
+
+    // Cleanup
+    fd_remap(temp_stdin, STDIN_FILENO);
+    fd_remap(temp_stdout, STDOUT_FILENO);
+    fd_remap(temp_stderr, STDERR_FILENO);
+}
+
+
 // command::run()
 //    Run the command represented by `this`.
 //
@@ -207,47 +344,7 @@ void command::run() {
     assert(this->args.size() > 0);
 
     // Handle cd commands
-    if (this->args.front() == "cd") {
-
-        // Setup
-        this->pid = getpid();
-        std::string target_directory;
-
-        // Command is just "cd"
-        if (this->args.size() == 1) {
-            target_directory = "/";
-
-        // Command is "cd `this->args[1]`"
-        } else if (this->args.size() == 2) {
-            target_directory = this->args[1];
-
-        // Too many args
-        } else {
-            std::cerr << "sh61: cd: too many arguments\n";
-            last_exit = ERR_SYNTAX;
-            return;
-        }
-
-        // Attempt cd
-        int chdir_r = chdir(target_directory.c_str());
-        if (chdir_r == 0) last_exit = EXIT_SUCCESS;
-        else {
-            last_exit = EXIT_FAILURE;
-            // Give more error messaging if enabled
-            if (MORE_ERROR_MESSAGES) {
-                if (errno == ENOTDIR) {
-                    std::cerr << "sh61: cd: "
-                              << target_directory
-                              << ": Not a directory\n";
-                } else {
-                    std::cerr << "sh61: cd: "
-                              << target_directory
-                              << ": No such file or directory\n";
-                }
-            }
-        }
-        return;
-    }
+    if (this->args.front() == "cd") return this->cd();
 
     // Fork
     pid_t fork_r = fork();
@@ -255,66 +352,9 @@ void command::run() {
     // Child
     if (fork_r == 0) {
 
-        // Set child's PGID
-        int pgid_r;
-        if (this->pgid == -1) pgid_r = setpgrp();
-        else pgid_r = setpgid(0, this->pgid);
-        if (pgid_r == -1) {
-            std::cerr << "sh61: failed setpgid\n";
-            _exit(EXIT_FAILURE);
-        }
-
-        // Set up pipes if applicable
-        if (this->infd != STDIN_FILENO) fd_remap(this->infd, STDIN_FILENO);
-        if (this->outpipe[1] != STDOUT_FILENO) {
-            assert(this->outpipe[0] != -1);
-            close(this->outpipe[0]);
-            fd_remap(this->outpipe[1], STDOUT_FILENO);
-        } else assert(this->outpipe[0] == -1);
-
-        // Confirm pipeline is still active (handles `SIGINT` race condition)
-        if (!is_fd_open(STDIN_FILENO) || !is_fd_open(STDOUT_FILENO)) {
-            _exit(130);         // exit status for `SIGINT`
-        }
-
-        // Set up redirections if applicable (redirections will shadow pipes)
-        for (auto re = this->redirections.begin();
-                 re != this->redirections.end();
-                 ++re) {
-
-            assert(re->dest == 0 || re->dest == 1 || re->dest == 2);
-            
-            int redir;
-
-            // Input redirection setup
-            if (re->dest == STDIN_FILENO) {
-                redir = openat(AT_FDCWD, re->file.c_str(), O_RDONLY);
-
-            // Output/error redirection setup
-            } else {
-                // Set mode for open
-                int mode = S_IRUSR | S_IWUSR
-                         | S_IRGRP | S_IWGRP
-                         | S_IROTH | S_IWOTH;       // `mode == 00666`
-                
-                // Set flags for open
-                int flags = O_WRONLY | O_CREAT;
-                if (re->append) flags |= O_APPEND;
-                else flags |= O_TRUNC;
-
-                // Open redirection file
-                redir = openat(AT_FDCWD, re->file.c_str(), flags, mode);
-            }
-
-            // Perform redirection
-            if (redir == -1) {
-                std::cerr << "sh61: "
-                          << re->file.c_str()
-                          << ": No such file or directory\n";
-                _exit(EXIT_FAILURE);
-            }
-            fd_remap(redir, re->dest);
-        }
+        // Redirections shadow pipes: pipe then redirect
+        this->pipe();
+        this->redirect();
 
         // Build args vector (`strdup` will call `malloc`)
         std::vector<char*> cstring_args;
