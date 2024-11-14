@@ -268,7 +268,8 @@ void command::run() {
         for (auto re : redirections) {
             assert(re.rtype == TYPE_LHOINKY
                        || re.rtype == TYPE_RHOINKY
-                       || re.rtype == TYPE_2RHOINKY);
+                       || re.rtype == TYPE_2RHOINKY
+                       || re.rtype == TYPE_RRHOINKY);
             
             int direction, redirection;
 
@@ -279,17 +280,27 @@ void command::run() {
 
             // Output/error redirection setup
             } else {
+                bool append = false;
                 if (re.rtype == TYPE_RHOINKY) direction = STDOUT_FILENO;
                 else if (re.rtype == TYPE_2RHOINKY) direction = STDERR_FILENO;
+                else if (re.rtype == TYPE_RRHOINKY) {
+                    direction = STDOUT_FILENO;
+                    append = true;
+                }
                 else assert(false);                 // Should never reach
 
+                // Set mode for open
                 int mode = S_IRUSR | S_IWUSR
                          | S_IRGRP | S_IWGRP
                          | S_IROTH | S_IWOTH;       // `mode == 00666`
-                redirection = openat(AT_FDCWD,
-                                     re.file.c_str(),
-                                     O_WRONLY | O_CREAT | O_TRUNC,
-                                     mode);
+                
+                // Set flags for open
+                int flags = O_WRONLY | O_CREAT;
+                if (append) flags |= O_APPEND;
+                else flags |= O_TRUNC;
+
+                // Open redirection file
+                redirection = openat(AT_FDCWD, re.file.c_str(), flags, mode);
             }
 
             // Perform redirection
@@ -380,7 +391,8 @@ void run_pipeline(shell_parser ppln) {
             // Add any redirections
             if (type == TYPE_LHOINKY
                     || type == TYPE_RHOINKY
-                    || type == TYPE_2RHOINKY) {
+                    || type == TYPE_2RHOINKY
+                    || type == TYPE_RRHOINKY) {
 
                 // Get redirection filename
                 tok.next();

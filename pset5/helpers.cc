@@ -57,7 +57,14 @@ void shell_tokenizer::next() {
         ++p;
         if (p[-1] == '<') _type = TYPE_LHOINKY;
         else if (p - 2 >= _s && p[-2] == '2') _type = TYPE_2RHOINKY;
-        else _type = TYPE_RHOINKY;
+        else {
+            if (p != _end && *p == '>') {
+                _type = TYPE_RRHOINKY;
+                ++p;
+            } else {
+                _type = TYPE_RHOINKY;
+            }
+        }
 
     } else if (p == _s
                && (*p == '&' || *p == '|')
@@ -144,6 +151,9 @@ const char* shell_tokenizer::type_name() const {
     case TYPE_LPAREN:       return "TYPE_LPAREN";
     case TYPE_RPAREN:       return "TYPE_RPAREN";
     case TYPE_OTHER:        return "TYPE_OTHER";
+    case TYPE_LHOINKY:      return "TYPE_LHOINKY";
+    case TYPE_RHOINKY:      return "TYPE_RHOINKY";
+    case TYPE_2RHOINKY:     return "TYPE_2RHOINKY";
     default:                return "TYPE_UNKNOWN";
     }
 }

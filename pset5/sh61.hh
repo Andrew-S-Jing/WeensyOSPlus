@@ -25,6 +25,7 @@
 #define TYPE_LHOINKY       9   // `<` operator
 #define TYPE_RHOINKY       10  // `>` operator
 #define TYPE_2RHOINKY      11  // `2>` operator
+#define TYPE_RRHOINKY      12  // `>>` operator
 #define TYPE_OTHER         -1
 
 struct shell_tokenizer;
