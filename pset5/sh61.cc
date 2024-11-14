@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cerrno>
 #include <vector>
+#include <set>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <iostream>
@@ -30,6 +31,17 @@ volatile sig_atomic_t interrupted = 0;
 void SIGINT_HANDLER(int sig) {
     interrupted = sig;
 }
+
+
+// type_redirections
+//    Constant set of the possible types of redirections
+
+const std::set<int> type_redirections = {
+    TYPE_LHOINKY,
+    TYPE_RHOINKY, TYPE_RRHOINKY,
+    TYPE_2RHOINKY, TYPE_2RRHOINKY,
+    TYPE_ARHOINKY, TYPE_ARRHOINKY
+};
 
 
 // Internal exit statuses: 0-255 are reserved for system-defined statuses
@@ -60,8 +72,9 @@ std::vector<pid_t> subshells;
 //    Data structure describing a command. Add your own stuff.
 
 struct redirection {
-    int rtype;                  // type of redirection operator as defined above
-    std::string file;           // filename
+    int dest;                   // Replacing either stdin, stdout, or stderr
+    std::string file;           // Filename
+    bool append;                // Append/truncate the file
 };
 struct command {
     std::vector<std::string> args;
@@ -265,30 +278,20 @@ void command::run() {
         }
 
         // Set up redirections if applicable (redirections will shadow pipes)
-        for (auto re : redirections) {
-            assert(re.rtype == TYPE_LHOINKY
-                       || re.rtype == TYPE_RHOINKY
-                       || re.rtype == TYPE_2RHOINKY
-                       || re.rtype == TYPE_RRHOINKY);
+        for (auto re = this->redirections.begin();
+                 re != this->redirections.end();
+                 ++re) {
+
+            assert(re->dest == 0 || re->dest == 1 || re->dest == 2);
             
-            int direction, redirection;
+            int redir;
 
             // Input redirection setup
-            if (re.rtype == TYPE_LHOINKY) {
-                direction = STDIN_FILENO;
-                redirection = openat(AT_FDCWD, re.file.c_str(), O_RDONLY);
+            if (re->dest == STDIN_FILENO) {
+                redir = openat(AT_FDCWD, re->file.c_str(), O_RDONLY);
 
             // Output/error redirection setup
             } else {
-                bool append = false;
-                if (re.rtype == TYPE_RHOINKY) direction = STDOUT_FILENO;
-                else if (re.rtype == TYPE_2RHOINKY) direction = STDERR_FILENO;
-                else if (re.rtype == TYPE_RRHOINKY) {
-                    direction = STDOUT_FILENO;
-                    append = true;
-                }
-                else assert(false);                 // Should never reach
-
                 // Set mode for open
                 int mode = S_IRUSR | S_IWUSR
                          | S_IRGRP | S_IWGRP
@@ -296,21 +299,21 @@ void command::run() {
                 
                 // Set flags for open
                 int flags = O_WRONLY | O_CREAT;
-                if (append) flags |= O_APPEND;
+                if (re->append) flags |= O_APPEND;
                 else flags |= O_TRUNC;
 
                 // Open redirection file
-                redirection = openat(AT_FDCWD, re.file.c_str(), flags, mode);
+                redir = openat(AT_FDCWD, re->file.c_str(), flags, mode);
             }
 
             // Perform redirection
-            if (redirection == -1) {
+            if (redir == -1) {
                 std::cerr << "sh61: "
-                          << re.file.c_str()
+                          << re->file.c_str()
                           << ": No such file or directory\n";
                 _exit(EXIT_FAILURE);
             }
-            fd_remap(redirection, direction);
+            fd_remap(redir, re->dest);
         }
 
         // Build args vector (`strdup` will call `malloc`)
@@ -389,10 +392,7 @@ void run_pipeline(shell_parser ppln) {
             int type = tok.type();
 
             // Add any redirections
-            if (type == TYPE_LHOINKY
-                    || type == TYPE_RHOINKY
-                    || type == TYPE_2RHOINKY
-                    || type == TYPE_RRHOINKY) {
+            if (type_redirections.find(type) != type_redirections.end()) {
 
                 // Get redirection filename
                 tok.next();
@@ -404,7 +404,58 @@ void run_pipeline(shell_parser ppln) {
                     last_exit = ERR_SYNTAX;
                     return;
                 }
-                c->redirections.push_back({.rtype = type, .file = tok.str()});
+
+                // Redirection locals
+                int append = -1;
+                int dest = -1;
+
+                // Append
+                if (type == TYPE_RRHOINKY
+                        || type == TYPE_2RRHOINKY
+                        || type == TYPE_ARRHOINKY) {
+                    append = 1;
+
+                // Truncate
+                } else if (type == TYPE_LHOINKY
+                               || type == TYPE_RHOINKY
+                               || type == TYPE_2RHOINKY
+                               || type == TYPE_ARHOINKY) {
+                    append = 0;
+                }
+                assert(append == 0 || append == 1);
+
+
+                // Redirect stdin
+                if (type == TYPE_LHOINKY) {
+                    dest = 0;
+
+                // Redirect stdout
+                } else if (type == TYPE_RHOINKY || type == TYPE_RRHOINKY) {
+                    dest = 1;
+                
+                // Redirect stderr
+                } else if (type == TYPE_2RHOINKY || type == TYPE_2RRHOINKY) {
+                    dest = 2;
+                
+                // Redirect both stdout and stderr
+                } else if (type == TYPE_ARHOINKY || type == TYPE_ARRHOINKY) {
+                    dest = 3;   // Means `dest` is both `1` and `2`
+                }
+                assert(dest != -1);
+
+
+                // Mark redirection(s)
+                redirection redir = {.dest = dest,
+                                     .file = tok.str(),
+                                     .append = (bool) append};
+                if (dest == 3) {
+                    redir.dest = 2;
+                    c->redirections.push_back(redir);
+                    redir.dest = 1;
+                    c->redirections.push_back(redir);
+                } else {
+                    c->redirections.push_back(redir);
+                }
 
             // Add any args
             } else if (type == TYPE_NORMAL) {
@@ -474,6 +525,9 @@ void run_pipeline(shell_parser ppln) {
     // Wait for all commands in pipeline to exit
     for (auto child : children) {
         if (child != pid) waitpid(child, &command_r, WAIT_MYPGRP);
+        if (WIFSIGNALED(command_r) && WTERMSIG(command_r) == SIGINT) {
+            interrupted = SIGINT;
+        }
     }
 
     claim_foreground(0);

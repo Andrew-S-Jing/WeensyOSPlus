@@ -12,5 +12,6 @@ Grading notes (if any)
 
 Extra credit attempted (if any)
 -------------------------------
-Implemented `SIGINT` handling: kills current pipeline
-Changed parser to handle `<`, `>`, and `2>` separately
+Implemented `SIGINT` handling: kills current pipeline and resets prompt
+Changed parser to handle `<`, `>`, `2>`, `&>`, `>>`, `2>>`, and `&>>` separately
+Supported more redirections: `&>`, `>>`, `2>>`, and `&>>`

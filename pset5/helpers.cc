@@ -55,15 +55,20 @@ void shell_tokenizer::next() {
     if (p != _end && (*p == '<' || *p == '>')) {
         // Redirection
         ++p;
-        if (p[-1] == '<') _type = TYPE_LHOINKY;
-        else if (p - 2 >= _s && p[-2] == '2') _type = TYPE_2RHOINKY;
-        else {
-            if (p != _end && *p == '>') {
-                _type = TYPE_RRHOINKY;
-                ++p;
-            } else {
-                _type = TYPE_RHOINKY;
-            }
+        if (p[-1] == '<') {
+            _type = TYPE_LHOINKY;
+        } else if (p - 2 >= _s) {
+            if (p[-2] == '2') _type = TYPE_2RHOINKY;
+            else if (p[-2] == '&') _type = TYPE_ARHOINKY;
+        } else {
+            _type = TYPE_RHOINKY;
+        }
+        if (p != _end && *p == '>') {
+            if (_type == TYPE_RHOINKY) _type = TYPE_RRHOINKY;
+            else if (_type == TYPE_2RHOINKY) _type = TYPE_2RRHOINKY;
+            else if (_type == TYPE_ARHOINKY) _type = TYPE_ARRHOINKY;
+            else _type = TYPE_OTHER;
+            ++p;
         }
 
     } else if (p == _s

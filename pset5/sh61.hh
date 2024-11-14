@@ -20,12 +20,15 @@
 
 // If you want to handle an extended shell syntax for extra credit, here are
 // some other token types to get you started.
-#define TYPE_LPAREN        7   // `(` operator
-#define TYPE_RPAREN        8   // `)` operator
-#define TYPE_LHOINKY       9   // `<` operator
-#define TYPE_RHOINKY       10  // `>` operator
-#define TYPE_2RHOINKY      11  // `2>` operator
-#define TYPE_RRHOINKY      12  // `>>` operator
+#define TYPE_LPAREN        7   // `(`   operator
+#define TYPE_RPAREN        8   // `)`   operator
+#define TYPE_LHOINKY       9   // `<`   operator
+#define TYPE_RHOINKY       10  // `>`   operator
+#define TYPE_2RHOINKY      11  // `2>`  operator
+#define TYPE_ARHOINKY      12  // `&>`  operator
+#define TYPE_RRHOINKY      13  // `>>`  operator
+#define TYPE_2RRHOINKY     14  // `2>>` operator
+#define TYPE_ARRHOINKY     15  // `&>>` operator
 #define TYPE_OTHER         -1
 
 struct shell_tokenizer;
