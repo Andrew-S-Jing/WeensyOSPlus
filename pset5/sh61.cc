@@ -22,6 +22,16 @@
 #define MORE_ERROR_MESSAGES true
 #endif
 
+
+// SIGINT_HANDLER(sig)
+//    Handler for `SIGINT`
+
+volatile sig_atomic_t interrupted = 0;
+void SIGINT_HANDLER(int sig) {
+    interrupted = sig;
+}
+
+
 // Internal exit statuses: 0-255 are reserved for system-defined statuses
 #define ERR_NOTEXIT     -1
 #define ERR_SYNTAX      -2
@@ -544,7 +554,7 @@ void run_commandline(shell_parser cmdl) {
     auto cond = cmdl.first_conditional();
 
     // Run any conditionals
-    while (cond) {
+    while (cond && !interrupted) {
 
         // Background processes for `&` operators
         if (cond.op() == TYPE_BACKGROUND) {
@@ -602,12 +612,22 @@ int main(int argc, char* argv[]) {
     //   into the foreground
     claim_foreground(0);
     set_signal_handler(SIGTTOU, SIG_IGN);
+    set_signal_handler(SIGINT, SIGINT_HANDLER);
 
     char buf[BUFSIZ];
     int bufpos = 0;
     bool needprompt = true;
 
     while (!feof(command_file)) {
+
+        // Handle `SIGINT`
+        if (interrupted == SIGINT) {
+            printf("\n");
+            needprompt = true;
+            interrupted = 0;
+            continue;
+        };
+
         // Print the prompt at the beginning of the line
         if (needprompt && !quiet) {
             printf("sh61[%d]$ ", getpid());
