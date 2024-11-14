@@ -22,11 +22,6 @@
 #define MORE_ERROR_MESSAGES true
 #endif
 
-// Redirection operators
-#define L_HOINKY        0
-#define R_HOINKY        1
-#define R2_HOINKY       2
-
 // Internal exit statuses: 0-255 are reserved for system-defined statuses
 #define ERR_NOTEXIT     -1
 #define ERR_SYNTAX      -2
@@ -261,21 +256,21 @@ void command::run() {
 
         // Set up redirections if applicable (redirections will shadow pipes)
         for (auto re : redirections) {
-            assert(re.rtype == L_HOINKY
-                       || re.rtype == R_HOINKY
-                       || re.rtype == R2_HOINKY);
+            assert(re.rtype == TYPE_LHOINKY
+                       || re.rtype == TYPE_RHOINKY
+                       || re.rtype == TYPE_2RHOINKY);
             
             int direction, redirection;
 
             // Input redirection setup
-            if (re.rtype == L_HOINKY) {
+            if (re.rtype == TYPE_LHOINKY) {
                 direction = STDIN_FILENO;
                 redirection = openat(AT_FDCWD, re.file.c_str(), O_RDONLY);
 
             // Output/error redirection setup
             } else {
-                if (re.rtype == R_HOINKY) direction = STDOUT_FILENO;
-                else if (re.rtype == R2_HOINKY) direction = STDERR_FILENO;
+                if (re.rtype == TYPE_RHOINKY) direction = STDOUT_FILENO;
+                else if (re.rtype == TYPE_2RHOINKY) direction = STDERR_FILENO;
                 else assert(false);                 // Should never reach
 
                 int mode = S_IRUSR | S_IWUSR
@@ -373,21 +368,9 @@ void run_pipeline(shell_parser ppln) {
             int type = tok.type();
 
             // Add any redirections
-            if (type == TYPE_REDIRECT_OP) {
-
-                // Determine redirection type
-                int rtype;
-                if (tok.str() == "<") rtype = L_HOINKY;
-                else if (tok.str() == ">") rtype = R_HOINKY;
-                else if (tok.str() == "2>") rtype = R2_HOINKY;
-                else {
-                    std::cerr << "sh61: parser error: `"
-                              << tok.str()
-                              << "` parsed as `TYPE_REDIRECT_OP`\n";
-                    delete c;
-                    last_exit = ERR_PARSE;
-                    abort();
-                }
+            if (type == TYPE_LHOINKY
+                    || type == TYPE_RHOINKY
+                    || type == TYPE_2RHOINKY) {
 
                 // Get redirection filename
                 tok.next();
@@ -399,7 +382,7 @@ void run_pipeline(shell_parser ppln) {
                     last_exit = ERR_SYNTAX;
                     return;
                 }
-                c->redirections.push_back({.rtype = rtype, .file = tok.str()});
+                c->redirections.push_back({.rtype = type, .file = tok.str()});
 
             // Add any args
             } else if (type == TYPE_NORMAL) {

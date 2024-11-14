@@ -55,14 +55,9 @@ void shell_tokenizer::next() {
     if (p != _end && (*p == '<' || *p == '>')) {
         // Redirection
         ++p;
-        if (p != _end && *p == '>') {
-            ++p;
-        } else {
-            while (p != _end && isdigit((unsigned char) *p)) {
-                ++p;
-            }
-        }
-        _type = TYPE_REDIRECT_OP;
+        if (p[-1] == '<') _type = TYPE_LHOINKY;
+        else if (p - 2 >= _s && p[-2] == '2') _type = TYPE_2RHOINKY;
+        else _type = TYPE_RHOINKY;
 
     } else if (p == _s
                && (*p == '&' || *p == '|')

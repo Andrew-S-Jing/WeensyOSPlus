@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #define TYPE_NORMAL        0   // normal command word
-#define TYPE_REDIRECT_OP   1   // redirection operator (>, <, 2>)
+#define TYPE_REDIRECT_OP   1   // redirection operator (>, <, 2>) *DEPRECATED*
 
 // All other tokens are control operators that terminate the current command.
 #define TYPE_SEQUENCE      2   // `;` sequence operator or end of command line
@@ -22,6 +22,9 @@
 // some other token types to get you started.
 #define TYPE_LPAREN        7   // `(` operator
 #define TYPE_RPAREN        8   // `)` operator
+#define TYPE_LHOINKY       9   // `<` operator
+#define TYPE_RHOINKY       10  // `>` operator
+#define TYPE_2RHOINKY      11  // `2>` operator
 #define TYPE_OTHER         -1
 
 struct shell_tokenizer;

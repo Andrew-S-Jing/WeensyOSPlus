@@ -13,3 +13,4 @@ Grading notes (if any)
 Extra credit attempted (if any)
 -------------------------------
 Implemented `SIGINT` handling: kills current pipeline
+Changed parser to handle `<`, `>`, and `2>` separately
