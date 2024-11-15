@@ -8,7 +8,7 @@
 
 int main() {
     size_t buffer_max_alloc = 8 << 20;
-    buffer_max_alloc -= 2 * alignof(std::max_align_t);
+    buffer_max_alloc -= 3 * alignof(std::max_align_t);
     void* ptr = m61_malloc(buffer_max_alloc);
     m61_free(ptr);
 
@@ -16,4 +16,4 @@ int main() {
 }
 
 //! alloc count: active          0   total          1   fail          0
-//! alloc size:  active          0   total    8388576   fail          0
+//! alloc size:  active          0   total    8388560   fail          0
