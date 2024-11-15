@@ -298,10 +298,10 @@ header* m61_free_bug_detect(void* ptr, const char* file, int line) {
     header* head_to_free = (header*) ptr - 1;
 
     // Bug Detection (Cont.)
-    // Unaligned Free
-    if (head_to_free->mem() % quantum != 0) {
+    // Unaligned Free (Report as Wild Free)
+    if ((uintptr_t) head_to_free % quantum != 0) {
         std::cerr << "MEMORY BUG: " << file << ':' << line
-            << ": invalid free of pointer " << ptr << ", unaliged address\n";
+            << ": invalid free of pointer " << ptr << ", not allocated\n";
         abort();
     }
     // Double Free
@@ -310,25 +310,40 @@ header* m61_free_bug_detect(void* ptr, const char* file, int line) {
             << ": invalid free of pointer " << ptr << ", double free\n";
         abort();
     }
-    // Wild Free
-    if ((head_to_free->next() != nullptr
-             && head_to_free->next()->prev_header != head_to_free)
-        || (head_to_free->prev_header != 0
-            && ((header*) head_to_free->prev_header)->next() != head_to_free)) {
+    // Wild Free (prevents some simple fake header attacks)
+    header* prev = head_to_free->prev_header;
+    if ((prev != nullptr
+            && ((uintptr_t) prev % alignof(header) != 0
+                || (uintptr_t) prev->prev_header % alignof(header) != 0
+                || (prev->prev_header != 0
+                    && prev->prev_header < (header*) stats.heap_min - 1)
+                || (uintptr_t) prev->prev_header >= stats.heap_max))
+            || (head_to_free->next() != nullptr
+                && head_to_free->next()->prev_header != head_to_free)
+            || (head_to_free->prev_header != 0
+                && ((header*) head_to_free->prev_header)->next()
+                    != head_to_free)) {
         std::cerr << "MEMORY BUG: " << file << ':' << line
             << ": invalid free of pointer " << ptr << ", not allocated\n";
-        if (head_to_free->prev_header != 0) {
-            header* prev_active = (header*) head_to_free->prev_header;
-            uintptr_t prev_addr = (uintptr_t) (prev_active + 1);
-            // Wild Free inside allocated chunk
-            if (prev_addr <= head_to_free->mem()
-                    && head_to_free->mem() < prev_addr + prev_active->size) {
-                std::cerr << "  " << prev_active->file << ':'
-                    << prev_active->line << ": " << ptr << " is "
-                    << head_to_free->mem() - prev_addr << " bytes inside a "
-                    << prev_active->size
-                    << " byte region allocated here" << '\n';
+        // Find possible allocated chunk containing attempted free
+        header* alloc_head = nullptr;
+        for (header* cursor = (header*) default_buffer.buffer;
+                    cursor;
+                    cursor = cursor->next()) {
+            if ((uintptr_t) ptr >= cursor->mem() &&
+                    (uintptr_t) ptr < cursor->mem() + cursor->size) {
+                alloc_head = cursor;
+                break;
             }
+            if (cursor->mem() > (uintptr_t) ptr) break;
+        }
+        if (alloc_head != nullptr) {
+            // Wild Free inside allocated chunk
+            std::cerr << "  " << alloc_head->file << ':'
+                << alloc_head->line << ": " << ptr << " is "
+                << head_to_free->mem() - alloc_head->mem() << " bytes inside a "
+                << alloc_head->size
+                << " byte region allocated here" << '\n';
         }
         abort();
     }
@@ -347,22 +362,21 @@ header* m61_free_bug_detect(void* ptr, const char* file, int line) {
         abort();
     }
     // Check fence-post writes on upper border
+    bool wild = false;
+    for (size_t i = head_to_free->size; i < head_to_free->allotment; ++i) {
+        if (((char*) head_to_free->mem())[i] != CANARY) {
+            wild = true;
+            break;
+        }
+    }
     header* next_header = head_to_free->next();
-    if (next_header != nullptr) {
-        bool wild = false;
-        for (size_t i = head_to_free->size; i < head_to_free->allotment; ++i) {
-            if (((char*) head_to_free->mem())[i] != CANARY) {
-                wild = true;
-                break;
-            }
-        }
-        if (wild || memcmp(next_header->canary1, CANARIES, CSIZE) != 0) {
-            std::cerr << "MEMORY BUG: " << file << ':' << line
-                << ": detected wild write during free of pointer " << ptr
-                << '\n'
-                << "Wild write occured on the allocation's upper border\n";
-            abort();
-        }
+    if (wild || (next_header != nullptr
+                 && memcmp(next_header->canary1, CANARIES, CSIZE) != 0)) {
+        std::cerr << "MEMORY BUG: " << file << ':' << line
+            << ": detected wild write during free of pointer " << ptr
+            << '\n'
+            << "Wild write occured on the allocation's upper border\n";
+        abort();
     }
 
     // Return the element to be freed
@@ -381,7 +395,9 @@ void m61_coalesce(header* current) {
     if (next && (next->status == INACTIVE || next->status == FREED)) {
         header* next_next = next->next();
         current->allotment += next->allotment + HSIZE;
+        unsigned status = next->status;
         memset(next, 0, HSIZE);
+        next->status = status;
         if (next_next) next_next->prev_header = current;
     }
 
@@ -389,7 +405,9 @@ void m61_coalesce(header* current) {
     header* prev = (header*) current->prev_header;
     if (prev && (prev->status == INACTIVE || prev->status == FREED)) {
         prev->allotment += HSIZE + current->allotment;
+        unsigned status = current->status;
         memset(current, 0, HSIZE);
+        current->status = status;
         next = prev->next();
         if (next) next->prev_header = prev;
     }

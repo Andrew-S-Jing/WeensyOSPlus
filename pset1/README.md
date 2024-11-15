@@ -12,5 +12,7 @@ Grading notes (if any)
 
 Extra credit attempted (if any)
 -------------------------------
-Extra tests: test27b.cc, test46b.cc, test46c.cc, test46d.cc
+Internal metadata! (Addresses some basic attacks that would use `m61_free`)
+Extra tests: `test27b.cc`, `test46b.cc`, `test46c.cc`, `test46d.cc`
     See comments in test files for further description
+    (Changed `test46*.cc` to match internal meta's implementation of canaries)

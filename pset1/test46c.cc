@@ -9,15 +9,18 @@
 
 
 int main() {
-    int* ptr = (int*) m61_malloc(sizeof(int) * 10);
+    int nints = 189;
+    int mintalign = alignof(std::max_align_t) / sizeof(int);
+    int ncanaryints = mintalign - (nints % mintalign) + 1;
+    int* ptr = (int*) m61_malloc(sizeof(int) * nints);
     fprintf(stderr, "Will free %p\n", ptr);
     
-    // Zero a random int block in [ end + 2, end + alignof(std::max_align_t) )
+    // Zero a random int block in [ end + 1, end + CSIZE + 1 )
     // See Citation "Rand" for getting a random number
     std::random_device rd; // obtain a random number from hardware
     std::mt19937 gen(rd()); // seed the generator
-    std::uniform_int_distribution<> distr(1, alignof(std::max_align_t) / sizeof(int)); // define the range
-    ptr[10 + distr(gen)] = 0;
+    std::uniform_int_distribution<> distr(1, ncanaryints - 1); // define the range
+    ptr[nints + distr(gen)] = 0;
 
     m61_free(ptr);
     m61_print_statistics();

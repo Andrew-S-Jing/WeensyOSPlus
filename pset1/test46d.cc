@@ -9,14 +9,15 @@
 
 
 int main() {
-    int* ptr = (int*) m61_malloc(sizeof(int) * 10);
+    int nbytes = 10;
+    char* ptr = (char*) m61_malloc(nbytes);
     fprintf(stderr, "Will free %p\n", ptr);
     
-    // Zero a random int block in [ begin - alignof(std::max_align_t), begin )
+    // Zero a random byte in [ begin - CSIZE, begin )
     // See Citation "Rand" for getting a random number
     std::random_device rd; // obtain a random number from hardware
     std::mt19937 gen(rd()); // seed the generator
-    std::uniform_int_distribution<> distr(2, alignof(std::max_align_t) / sizeof(int)); // define the range
+    std::uniform_int_distribution<> distr(2, 4); // define the range
     ptr[-distr(gen)] = 0;
 
     m61_free(ptr);
