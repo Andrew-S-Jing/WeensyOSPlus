@@ -24,6 +24,15 @@ static const unsigned INACTIVE = 0x61616161;
 static const unsigned FREED = 06161616161;
 
 
+// set_canaries(head)
+//    Set canary bytes for header `head`
+
+void set_canaries(header* head) {
+    memcpy(head->canary1, CANARIES, CSIZE);
+    memcpy(head->canary2, CANARIES, CSIZE);
+}
+
+
 struct m61_memory_buffer {
     char* buffer;
     size_t pos = 0;
@@ -55,8 +64,7 @@ m61_memory_buffer::m61_memory_buffer() {
         .line = 0,
         .canary2 = 0
     };
-    memcpy(initial_head.canary1, CANARIES, CSIZE);
-    memcpy(initial_head.canary2, CANARIES, CSIZE);
+    set_canaries(&initial_head);
     *((header*) default_buffer.buffer) = initial_head;
 }
 
@@ -157,8 +165,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
                 .line = line,
                 .canary2 = 0
             };
-            memcpy(remainder->canary1, CANARIES, CSIZE);
-            memcpy(remainder->canary2, CANARIES, CSIZE);
+            set_canaries(remainder);
             header* next = remainder->next();
             if (next) next->prev_header = remainder;
         }
@@ -175,8 +182,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         .line = line,
         .canary2 = 0
     };
-    memcpy(head->canary1, CANARIES, CSIZE);
-    memcpy(head->canary2, CANARIES, CSIZE);
+    set_canaries(head);
     memset((void*) (head->mem() + sz), CANARY, allotment - sz);
 
     // After successful allocation, update `stats`
@@ -311,6 +317,7 @@ header* m61_free_bug_detect(void* ptr, const char* file, int line) {
         abort();
     }
     // Wild Free (prevents some simple fake header attacks)
+    // Uses several checks to test the validity of `head_to_free`
     header* prev = head_to_free->prev_header;
     if ((prev != nullptr
             && ((uintptr_t) prev % alignof(header) != 0
