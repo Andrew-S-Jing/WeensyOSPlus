@@ -731,6 +731,7 @@ int main(int argc, char* argv[]) {
             printf("\n");
             needprompt = true;
             interrupted = 0;
+            bufpos = 0;
             continue;
         };
 
