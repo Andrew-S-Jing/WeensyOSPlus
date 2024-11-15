@@ -18,17 +18,15 @@ struct header {
     char canary1[4];
     unsigned status;
     size_t size;
-    uintptr_t prev_header;
+    size_t allotment;
+    header* prev_header;
     const char* file;
     int line;
     char canary2[4];
 
     header* next();         // Returns the next `header*`
+    uintptr_t mem();        // Returns address of allocated memory
 };
-header* header::next() {
-    char* temp = reinterpret_cast<char*>(this) + sz_to_allot(this->size);
-    return reinterpret_cast<header*>(temp) + 1;
-}
 
 /// m61_activate_mem(addr, sz, allotment, file, line)
 ///     Adds the allocation described by the arguments, as well as the
@@ -52,7 +50,7 @@ header* m61_free_bug_detect(void* ptr, const char* file, int line);
 /// m61_coalesce(addr)
 ///     Coalesces the `inactives` element with key `(uintptr_t)ptr` with its
 ///       immediate upwards neighbor and immediate downwards neighbor
-void m61_coalesce(uintptr_t addr);
+void m61_coalesce(header* current);
 
 /// sz_to_allot(sz)
 ///     Helper to safely translate from size to allotment
