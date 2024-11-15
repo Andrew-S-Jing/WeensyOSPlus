@@ -22,12 +22,6 @@
 //                                             | \___ PROC_SIZE ___/
 //                                      PROC_START_ADDR
 
-#define PTE_COW PTE_OS1         // permission flag marking copy-on-write pages
-#define PTE_PCU (PTE_P | PTE_COW | PTE_U)
-#define NEWPAGE_PAGENO 1        // page number of universal newpage
-#define NEWPAGE_ADDR (NEWPAGE_PAGENO * PAGESIZE)
-                                // universal newpage under copy-on-write model
-
 #define PROC_SIZE 0x40000       // initial state only
 
 proc ptable[PID_MAX];           // array of process descriptors
@@ -81,10 +75,6 @@ void kernel_start(const char* command) {
         assert(r == 0); // mappings during kernel_start MUST NOT fail
                         // (Note that later mappings might fail!!)
     }
-
-    // set up universal newpage
-    memset((void*) NEWPAGE_ADDR, 0, PAGESIZE);
-    physpages[NEWPAGE_PAGENO].refcount++;
 
     // set up process descriptors
     for (pid_t i = 0; i < PID_MAX; i++) {
@@ -142,10 +132,8 @@ void* kalloc(size_t sz) {
 
     for (int tries = 0; tries != NPAGES; ++tries) {
         uintptr_t pa = pageno * PAGESIZE;
-        // newpage is never allocated by `kalloc()`
         if (allocatable_physical_address(pa)
-                && physpages[pageno].refcount == 0
-                && pa != NEWPAGE_ADDR) {
+            && physpages[pageno].refcount == 0) {
             ++physpages[pageno].refcount;
             memset((void*) pa, 0xCC, PAGESIZE);
             return (void*) pa;
@@ -345,39 +333,14 @@ void exception(regstate* regs) {
         break;                  /* will not be reached */
 
     case INT_PF: {
-        uintptr_t addr = rdcr2();
-        bool is_write_err = regs->reg_errcode & PTE_W;
-        bool is_prot_err = regs->reg_errcode & PTE_P;
-        bool is_user_err = regs->reg_errcode & PTE_U;
-
-        // Handle copy-on-write
-        if (is_write_err && is_prot_err && is_user_err) {
-            // Map writable mem to newly alloc'd phys addr
-            uintptr_t page_addr = addr - (addr & PAGEOFFMASK);
-            vmiter pte = vmiter(current->pagetable, page_addr);
-            if (pte.perm(PTE_COW)) {
-                void* new_kptr = kalloc(PAGESIZE);
-                if (new_kptr) {
-                    void* old_kptr = pte.kptr();
-                    int r = pte.try_map(new_kptr, PTE_PWU);
-                    if (r == 0) {
-                        memcpy(new_kptr, old_kptr, PAGESIZE);
-                        kfree(old_kptr);
-                        break;
-                    } else kfree(new_kptr);
-                }
-                current->state = P_BLOCKED;
-                break;
-            }
-        }
-
         // Analyze faulting address and access type.
-        const char* operation = is_write_err
+        uintptr_t addr = rdcr2();
+        const char* operation = regs->reg_errcode & PTE_W
                 ? "write" : "read";
-        const char* problem = is_prot_err
+        const char* problem = regs->reg_errcode & PTE_P
                 ? "protection problem" : "missing page";
 
-        if (!is_user_err) {
+        if (!(regs->reg_errcode & PTE_U)) {
             proc_panic(current, "Kernel page fault on %p (%s %s, rip=%p)!\n",
                        addr, operation, problem, regs->reg_rip);
         }
@@ -481,7 +444,7 @@ uintptr_t syscall(regstate* regs) {
 //
 //    Returns:
 //      Success: returns  `0`
-//      Errors:  returns `-1` ----no upfront mem allocation for copy-on-write---
+//      Errors:  returns `-1` on failed mem page allocation
 //               returns `-2` on failed pagetable page allocation
 //               returns `-3` on permission denied to kernel virt memspace
 //               returns `-4` on misaligned addr
@@ -496,9 +459,11 @@ int syscall_page_alloc(uintptr_t addr) {
     if (misaligned) return -4;
 
     // Map allocated page to user pagetable
-    int r = vmiter(current->pagetable, addr).try_map(NEWPAGE_ADDR, PTE_PCU);
-    physpages[NEWPAGE_PAGENO].refcount++;
-    if (r != 0) return -2;
+    int r = kpage_alloc(current->pid, addr, PTE_PWU);
+    if (r != 0) return r;
+    void* kptr = vmiter(current->pagetable, addr).kptr();
+    assert(kptr);
+    memset(kptr, 0, PAGESIZE);
 
     return 0;
 }
@@ -513,7 +478,7 @@ int syscall_page_alloc(uintptr_t addr) {
 //    Returns:
 //      Success: `pid` to parent process, where `pid` is the child's PID
 //                 `0` to child process
-//      Error:    `-1` -------no mem page allocation for copy-on-write----------
+//      Error:    `-1` on failed mem page allocation for child
 //                `-2` on failed pagetable page allocation for child
 //                `-3` on failed PID/process slot allocation
 
@@ -539,17 +504,29 @@ pid_t syscall_fork() {
     // Copy parent's mem mappings into new pagetable
     for (vmiter it = vmiter(current->pagetable, 0); !it.done(); it.next()) {
         vmiter pte = vmiter(ptable[pid].pagetable, it.va());
-        // Map mem to same phys addr
-        bool cow = it.va() != CONSOLE_ADDR && it.user() && it.writable();
-        int perm = cow ? PTE_PCU : it.perm();
-        int r = pte.try_map(it.pa(), perm);
-        if (r != 0) {
-            kcleanup(pid);
-            return -2;
+        if (it.va() < PROC_START_ADDR || (it.user() && !it.writable())) {
+            // Map kernel and read-only mem to same phys addr
+            int r = pte.try_map(it.pa(), it.perm());
+            if (r != 0) {
+                kcleanup(pid);
+                return -2;
+            }
+            if (it.user()) physpages[it.pa() / PAGESIZE].refcount++;
+        } else if (it.user() && it.writable()) {
+            // Map writable mem to newly alloc'd phys addr
+            void* pa = kalloc(PAGESIZE);
+            if (!pa) {
+                kcleanup(pid);
+                return -1;
+            }
+            int r = pte.try_map(pa, it.perm());
+            if (r != 0) {
+                kfree(pa);
+                kcleanup(pid);
+                return -2;
+            }
+            memcpy(pa, it.kptr(), PAGESIZE);
         }
-        // If copy-on-write is used, then also mark parent PTE as such
-        if (cow) it.map(it.pa(), perm);
-        if (it.user()) physpages[it.pa() / PAGESIZE].refcount++;
     }
 
     // Return `0` to child proc
@@ -567,7 +544,6 @@ void schedule() {
     pid_t pid = current->pid;
     for (unsigned spins = 1; true; ++spins) {
         pid = (pid + 1) % PID_MAX;
-        if (ptable[pid].state == P_BLOCKED) ptable[pid].state = P_RUNNABLE;
         if (ptable[pid].state == P_RUNNABLE) run(&ptable[pid]);
 
         // If Control-C was typed, exit the virtual machine.
