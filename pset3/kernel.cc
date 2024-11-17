@@ -261,7 +261,7 @@ void process_setup(pid_t pid, const char* program_name) {
     assert(ptable[pid].pagetable);
     // Map kernel mem to user pagetable
     for (uintptr_t addr = 0; addr < PROC_START_ADDR; addr += PAGESIZE) {
-        vmiter k_pte = vmiter(kernel_pagetable, addr);
+        vmiter k_pte(kernel_pagetable, addr);
         int r = vmiter(ptable[pid].pagetable, addr)
             .try_map(k_pte.pa(), k_pte.perm());
         assert(r == 0);
@@ -291,7 +291,7 @@ void process_setup(pid_t pid, const char* program_name) {
             assert (r == 0);
 
             // Copy code/data
-            vmiter pte = vmiter(ptable[pid].pagetable, a);
+            vmiter pte(ptable[pid].pagetable, a);
             memset(pte.kptr(), 0, PAGESIZE);
             // `size` (below) is the # of bytes to be copied on this page and
             //   is equal to either `PAGESIZE` or a smaller value, when fewer
@@ -376,7 +376,7 @@ void exception(regstate* regs) {
         // Write permission faults
         if ((regs->reg_errcode & (PTE_P | PTE_W)) == (PTE_P | PTE_W)) {
             uintptr_t va = addr - (addr & PAGEOFFMASK);
-            vmiter pte = vmiter(current->pagetable, va);
+            vmiter pte(current->pagetable, va);
             assert(pte.pa());
 
             // Handle copy-on-write faults
@@ -569,8 +569,8 @@ pid_t syscall_fork() {
     ptable[pid].state = P_RUNNABLE;
 
     // Copy parent's mem mappings into new pagetable
-    for (vmiter it = vmiter(current->pagetable, 0); !it.done(); it.next()) {
-        vmiter pte = vmiter(ptable[pid].pagetable, it.va());
+    for (vmiter it(current->pagetable, 0); !it.done(); it.next()) {
+        vmiter pte(ptable[pid].pagetable, it.va());
 
         // Map kernel and read-only mem to same phys addr
         if (it.va() < PROC_START_ADDR
