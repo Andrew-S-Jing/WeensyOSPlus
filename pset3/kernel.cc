@@ -25,8 +25,10 @@
 
 
 // Kernel uses a *STRICT* overcommit policy for copy-on-write
+//    Currently no disk compatibility, so policy must be strict to avoid
+//    arbitrarily picking a process and killing it for memory.
 // ncommittable
-//    once-usable function to initialize `NCOMMITTABLE`
+//    Once-usable function to initialize `NCOMMITTABLE`
 
 ssize_t ncommittable() {
     static bool used = false;
@@ -143,7 +145,7 @@ void kernel_start(const char* command) {
 void* kalloc(size_t sz) {
     if (sz > PAGESIZE || ncommitted >= NCOMMITTABLE) return nullptr;
 
-    int pageno = rand(0, NPAGES - 1);
+    static int pageno = 0;
     int page_increment = 1;
     // In the handout code, `kalloc` returns the first free page.
     // Alternate search strategies can be faster and/or expose bugs elsewhere.
@@ -514,23 +516,35 @@ uintptr_t syscall(regstate* regs) {
 
 
 // lvlx_index(addr, x)
-//    Returns the the level `x` index of physical address `addr`
-//    Per WeensyOS's design, there are only levels `1` through `4`
+//    Returns the the level `x` index of physical address `addr`.
+//    Per WeensyOS's design, there are only levels `1` through `4`.
 
 int lvlx_index(uintptr_t addr, int x) {
-    assert(x >= 1 && x <= 4);
-    uintptr_t lvlx_total_mask = (1UL << (x * PAGEINDEXBITS + PAGEOFFBITS)) - 1;
+    assert(x >= 1 && x <= NPTLEVELS);
+    unsigned lvlx_bits = x * PAGEINDEXBITS + PAGEOFFBITS;
+    uintptr_t lvlx_total_mask = (1UL << lvlx_bits) - 1;
     uintptr_t lvlx_mask = lvlx_total_mask & ~PAGEOFFMASK;
-    return (addr & lvlx_mask) >> x * PAGEINDEXBITS;
+    uintptr_t unshifted_index = addr & lvlx_mask;
+    int index = unshifted_index >> x * PAGEINDEXBITS;
+    assert(index >= 0 && !(index >> PAGEINDEXBITS));
+    return index;
 }
 
 
 // pte_next_down(pte)
-//    Translates a pagetable entry into the accessible pointer represented
+//    Dereferences a valid, present pagetable entry.
+//    Returns the phys addr of either a mem page or pagetable page, so
+//    the return typing is `void*` to make this ambiguity more apparent.
 
 void* pte_next_down(x86_64_pageentry_t pte) {
-    uintptr_t total_mask = (1UL << (4 * PAGEINDEXBITS + PAGEOFFBITS)) - 1;
-    return (void*) (pte & (total_mask & ~PAGEOFFMASK));
+    assert(pte & PTE_P);
+    unsigned total_bits = NPTLEVELS * PAGEINDEXBITS + PAGEOFFBITS;
+    assert(total_bits >= PAGEOFFBITS && total_bits <= 64);
+    uintptr_t total_mask = (1UL << total_bits) - 1;
+    uintptr_t no_flags_mask = total_mask & ~PAGEOFFMASK;
+    uintptr_t addr = pte & no_flags_mask;
+    assert(!(addr & PAGEOFFMASK) && addr <= total_mask);
+    return (void*) addr;
 }
 
 
@@ -557,24 +571,29 @@ int syscall_page_alloc(uintptr_t addr) {
     // Map newpage to user pagetable if enough pages committable for
     // both the new mem page and any new pagetable page(s)
     if (ncommitted >= NCOMMITTABLE) return -1;
-    int nptp_needed = 0;
-    x86_64_pageentry_t l4_entry = current
-                                      ->pagetable
-                                      ->entry[lvlx_index(addr, 4)];
-    if (!(l4_entry & PTE_P)) {
-        nptp_needed = 3;
-    } else {
-        x86_64_pageentry_t l3_entry = ((x86_64_pagetable*) pte_next_down(l4_entry))
-                                          ->entry[lvlx_index(addr, 3)];
-        if (!(l3_entry & PTE_P)) nptp_needed = 2;
-        else {
-            x86_64_pageentry_t l2_entry = ((x86_64_pagetable*) pte_next_down(l3_entry))
-                                              ->entry[lvlx_index(addr, 2)];
-            if (!(l2_entry & PTE_P)) nptp_needed = 1;
+
+    // Calculate the lowest level pagetable page that has the PTE for `addr`
+    int level_present = NPTLEVELS;                  // Top level always present
+    x86_64_pagetable* ptp = current->pagetable;
+    while (level_present != 1) {
+        x86_64_pageentry_t pte = ptp->entry[lvlx_index(addr, level_present)];
+
+        // Next pagetable page is present (in a lower level)
+        if (pte & PTE_P) {
+            --level_present;
+            ptp = (x86_64_pagetable*) pte_next_down(pte);
+
+        // No lower pagetable page
+        } else {
+            break;
         }
     }
+
+    // Confirm enough committable for both mem pages and pagetable pages
+    int nptp_needed = level_present - 1;
     if (ncommitted + nptp_needed >= NCOMMITTABLE) return -2;
 
+    // Map newpage, commit a future cloned newpage, should never fail
     vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, PTE_PCU);
     ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
     ++ncommitted;
@@ -615,8 +634,10 @@ pid_t syscall_fork() {
     ptable[pid].regs = current->regs;
     ptable[pid].state = P_RUNNABLE;
 
-    // Copy parent's mem mappings into new pagetable
+    // Copy parent's mem mappings into new child's pagetable
     for (vmiter it(current->pagetable, 0); !it.done(); it.next()) {
+
+        // Child's PTE
         vmiter pte(ptable[pid].pagetable, it.va());
 
         // Map kernel and read-only mem to same phys addr
@@ -638,7 +659,7 @@ pid_t syscall_fork() {
                 return -1;
             }
 
-            // Map child mem (flagged for copy-on-write)
+            // Map copy-on-write mem to child, commit a future cloned page
             if (pte.try_map(it.pa(), PTE_PCU) != 0) {
                 kcleanup(pid);
                 return -2;

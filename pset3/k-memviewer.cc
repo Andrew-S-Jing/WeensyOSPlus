@@ -160,6 +160,7 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
 
     unsigned pn = pa / PAGESIZE;
     if (pn < NPAGES && !physpages[pn].valid()) {
+        // The newpage may have more than one reference per process
         if (pa != NEWPAGE_ADDR) page_error(pa, "invalid reference count", -1);
     }
 
