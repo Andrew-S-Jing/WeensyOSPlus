@@ -22,6 +22,25 @@
 //                                             | \___ PROC_SIZE ___/
 //                                      PROC_START_ADDR
 
+
+
+// Kernel uses a *STRICT* overcommit policy for copy-on-write
+// ncommittable
+//    once-usable function to initialize `NCOMMITTABLE`
+
+ssize_t ncommittable() {
+    static bool used = false;
+    assert(!used);
+    ssize_t count = 0;
+    for (uintptr_t pa = 0; pa < MEMSIZE_VIRTUAL; pa += PAGESIZE) {
+        if (allocatable_physical_address(pa)) ++count;
+    }
+    return count;
+}
+static const ssize_t NCOMMITTABLE = ncommittable();
+static ssize_t ncommitted = 0;
+
+
 #define PROC_SIZE 0x40000       // initial state only
 
 proc ptable[PID_MAX];           // array of process descriptors
@@ -68,7 +87,7 @@ void kernel_start(const char* command) {
             perm = 0;
         } else if (addr < PROC_START_ADDR && addr != CONSOLE_ADDR) {
             // kernel memory (except CGA console) is inaccessible to user
-            perm ^= PTE_U;
+            perm &= ~PTE_U;
         }
         // install identity mapping
         int r = vmiter(kernel_pagetable, addr).try_map(addr, perm);
@@ -77,7 +96,7 @@ void kernel_start(const char* command) {
     }
 
     // set up process descriptors
-    for (pid_t i = 0; i < PID_MAX; i++) {
+    for (pid_t i = 0; i < PID_MAX; ++i) {
         ptable[i].pid = i;
         ptable[i].state = P_FREE;
     }
@@ -115,7 +134,7 @@ void kernel_start(const char* command) {
 //    Unhandled exception 3!` This may help you debug.
 
 void* kalloc(size_t sz) {
-    if (sz > PAGESIZE) return nullptr;
+    if (sz > PAGESIZE || ncommitted >= NCOMMITTABLE) return nullptr;
 
     int pageno = rand(0, NPAGES - 1);
     int page_increment = 1;
@@ -133,8 +152,9 @@ void* kalloc(size_t sz) {
     for (int tries = 0; tries != NPAGES; ++tries) {
         uintptr_t pa = pageno * PAGESIZE;
         if (allocatable_physical_address(pa)
-            && physpages[pageno].refcount == 0) {
+                && physpages[pageno].refcount == 0) {
             ++physpages[pageno].refcount;
+            ++ncommitted;
             memset((void*) pa, 0xCC, PAGESIZE);
             return (void*) pa;
         }
@@ -149,13 +169,19 @@ void* kalloc(size_t sz) {
 //    Free `kptr`, which must have been previously returned by `kalloc`.
 //    If `kptr == nullptr` does nothing.
 
-void kfree(void* kptr) {
+void kfree(void* kptr, bool cow) {
     if (!kptr) return;
     uintptr_t pa = reinterpret_cast<uintptr_t>(kptr);
     assert((pa & PAGEOFFBITS) == 0);
     int pageno = pa / PAGESIZE;
     assert(physpages[pageno].used());
-    physpages[pageno].refcount--;
+    --physpages[pageno].refcount;
+
+    // Page completely freed or every ref is a committed page (copy-on-write)
+    if (cow || (pa != CONSOLE_ADDR && physpages[pageno].refcount == 0)) {
+        --ncommitted;
+    }
+    assert(ncommitted >= 0);
 }
 
 
@@ -167,10 +193,19 @@ void kfree(void* kptr) {
 
 void kfree_pagetable(x86_64_pagetable* pt) {
     if (!pt) return;
-    for (vmiter it(pt, 0); !it.done(); it.next())
-        if (it.user()) kfree(it.kptr());
-    for (ptiter it(pt); !it.done(); it.next()) kfree(it.kptr());
-    kfree(pt);
+
+    // Free virt pages
+    for (vmiter it(pt, 0); !it.done(); it.next()) {
+        if (it.user()) kfree(it.kptr(), it.cow());
+    }
+
+    // Free level 1-3 pagetable pages
+    for (ptiter it(pt); !it.done(); it.next()) {
+        kfree(it.kptr(), false);
+    }
+
+    // Free level 4 pagetable page
+    kfree(pt, false);
 }
 
 
@@ -202,9 +237,8 @@ int kpage_alloc(pid_t pid, uintptr_t va, int perm) {
     void* kptr = kalloc(PAGESIZE);
     if (!kptr) return -1;
     // Map and user-permit the newly allocated page
-    int r = vmiter(ptable[pid].pagetable, va).try_map(kptr, perm);
-    if (r != 0) {
-        kfree(kptr);
+    if (vmiter(ptable[pid].pagetable, va).try_map(kptr, perm) != 0) {
+        kfree(kptr, false);
         return -2;
     }
     return 0;
@@ -268,7 +302,9 @@ void process_setup(pid_t pid, const char* program_name) {
                 size -= offset;
                 memcpy((void*) (pte.pa() + offset), cursor, size);
                 is_first_page = false;
-            } else memcpy(pte.kptr(), cursor, size);
+            } else {
+                memcpy(pte.kptr(), cursor, size);
+            }
 
             // Iterate vars
             cursor += PAGESIZE;
@@ -335,6 +371,36 @@ void exception(regstate* regs) {
     case INT_PF: {
         // Analyze faulting address and access type.
         uintptr_t addr = rdcr2();
+
+        // Write permission faults
+        if ((regs->reg_errcode & (PTE_P | PTE_W)) == (PTE_P | PTE_W)) {
+            uintptr_t va = addr - (addr & PAGEOFFMASK);
+            vmiter pte = vmiter(current->pagetable, va);
+            assert(pte.pa());
+
+            // Handle copy-on-write faults
+            if (pte.cow()) {
+                assert(pte.writable() != pte.cow());
+
+                // Do not free the ref page completely (`kalloc` will wipe mem)
+                if (physpages[pte.pa() / PAGESIZE].refcount == 1) {
+                    pte.map(pte.kptr(), PTE_PWU);
+                    break;
+                }
+
+                // Strict overcommit policy
+                assert(ncommitted <= NCOMMITTABLE);
+                void* kptr = pte.kptr();
+                kfree(kptr, true);
+                void* cowpage = kalloc(PAGESIZE);
+                assert(cowpage);
+                pte.map(cowpage, PTE_PWU);
+                memcpy(cowpage, kptr, PAGESIZE);
+                break;
+            }
+        }
+
+
         const char* operation = regs->reg_errcode & PTE_W
                 ? "write" : "read";
         const char* problem = regs->reg_errcode & PTE_P
@@ -504,28 +570,42 @@ pid_t syscall_fork() {
     // Copy parent's mem mappings into new pagetable
     for (vmiter it = vmiter(current->pagetable, 0); !it.done(); it.next()) {
         vmiter pte = vmiter(ptable[pid].pagetable, it.va());
-        if (it.va() < PROC_START_ADDR || (it.user() && !it.writable())) {
-            // Map kernel and read-only mem to same phys addr
-            int r = pte.try_map(it.pa(), it.perm());
-            if (r != 0) {
+
+        // Map kernel and read-only mem to same phys addr
+        if (it.va() < PROC_START_ADDR
+                || (it.user() && !it.writable() && !it.cow())) {
+            if (pte.try_map(it.pa(), it.perm()) != 0) {
                 kcleanup(pid);
                 return -2;
             }
-            if (it.user()) physpages[it.pa() / PAGESIZE].refcount++;
-        } else if (it.user() && it.writable()) {
-            // Map writable mem to newly alloc'd phys addr
-            void* pa = kalloc(PAGESIZE);
-            if (!pa) {
+            if (it.user()) ++physpages[it.pa() / PAGESIZE].refcount;
+
+        // Map writable mem to same phys addr (mark for copy-on-write)
+        } else if (it.user() && (it.writable() || it.cow())) {
+            assert(it.present() && it.writable() != it.cow());
+
+            // Strict overcommit policy
+            if (ncommitted >= NCOMMITTABLE) {
                 kcleanup(pid);
                 return -1;
             }
-            int r = pte.try_map(pa, it.perm());
-            if (r != 0) {
-                kfree(pa);
+
+            // Map child mem (flagged for copy-on-write)
+            if (pte.try_map(it.pa(), PTE_PCU) != 0) {
                 kcleanup(pid);
                 return -2;
             }
-            memcpy(pa, it.kptr(), PAGESIZE);
+            ++physpages[it.pa() / PAGESIZE].refcount;
+            ++ncommitted;
+            
+            // Check that `pte.try_map` did not overcommit
+            if (ncommitted > NCOMMITTABLE) {
+                kcleanup(pid);
+                return -2;
+            }
+
+            // Parent permissions must also be copy-on-write
+            if (it.writable()) it.map(it.pa(), PTE_PCU);
         }
     }
 
@@ -598,7 +678,9 @@ void memshow() {
         if (ptable[showing].state != P_FREE
             && ptable[showing].pagetable) {
             p = &ptable[showing];
-        } else showing = (showing + 1) % PID_MAX;
+        } else {
+            showing = (showing + 1) % PID_MAX;
+        }
     }
 
     console_memviewer(p);

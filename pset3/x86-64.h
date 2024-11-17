@@ -34,7 +34,10 @@
 #define PTE_OS1         0x200UL
 #define PTE_OS2         0x400UL
 #define PTE_OS3         0x800UL
-// There are other flags too!
+// There are other flags too! Including mine for copy-on-write! :)
+// I *am* the OS, so I will be using the PTE_OS1 flag for myself
+#define PTE_COW         0x200UL  // entry is copy-on-write (PTE_OS1)
+#define PTE_PCU         0x205UL  // PTE_P | PTE_COW | PTE_U
 
 #define PTE_PAMASK      0x000FFFFFFFFFF000UL // physical address in non-PS entry
 #define PTE_PS_PAMASK   0x000FFFFFFFFFE000UL // physical address in PS entry

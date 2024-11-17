@@ -108,7 +108,7 @@ void init_timer(int rate);
 
 
 void* kalloc(size_t sz);
-void kfree(void* ptr);
+void kfree(void* ptr, bool cow);
 
 
 // kernel page table (used for virtual memory)
