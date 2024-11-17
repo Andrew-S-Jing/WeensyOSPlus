@@ -37,9 +37,6 @@ ssize_t ncommittable() {
     for (uintptr_t pa = 0; pa < MEMSIZE_VIRTUAL; pa += PAGESIZE) {
         if (allocatable_physical_address(pa)) ++count;
     }
-    #ifdef NEWPAGE_ADDR
-    --count;
-    #endif
     used = true;
     return count;
 }
@@ -161,7 +158,6 @@ void* kalloc(size_t sz) {
     for (int tries = 0; tries != NPAGES; ++tries) {
         uintptr_t pa = pageno * PAGESIZE;
         if (allocatable_physical_address(pa)
-                && pa != NEWPAGE_ADDR
                 && physpages[pageno].refcount == 0) {
             ++physpages[pageno].refcount;
             ++ncommitted;

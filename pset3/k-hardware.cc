@@ -341,7 +341,7 @@ bool reserved_physical_address(uintptr_t pa) {
 
 // allocatable_physical_address(pa)
 //    Returns true iff `pa` is an allocatable physical address, i.e.,
-//    not reserved or holding kernel data.
+//    not reserved or holding kernel data or inside the newpage.
 
 bool allocatable_physical_address(uintptr_t pa) {
     extern uint8_t _kernel_end[];
@@ -350,6 +350,8 @@ bool allocatable_physical_address(uintptr_t pa) {
             || pa >= round_up((uintptr_t) _kernel_end, PAGESIZE))
         && (pa < KERNEL_STACK_TOP - PAGESIZE
             || pa >= KERNEL_STACK_TOP)
+        && (pa < NEWPAGE_ADDR
+            || pa >= NEWPAGE_ADDR + PAGESIZE)
         && pa < MEMSIZE_PHYSICAL;
 }
 

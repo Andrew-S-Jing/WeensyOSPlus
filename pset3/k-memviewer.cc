@@ -22,12 +22,13 @@ class memusage {
     static constexpr unsigned f_kernel = 1;      // kernel-restricted
     static constexpr unsigned f_user = 2;        // user-accessible
     static constexpr unsigned f_nonidentity = 4; // not identity mapped
+    static constexpr unsigned f_copyonwrite = 8; // copy-on-write
     // `f_process(pid)` is for memory associated with process `pid`
     static constexpr unsigned f_process(int pid) {
-        if (pid >= 29) {
-            return 4U << 31;
+        if (pid >= 28) {
+            return 8U << 30;
         } else if (pid >= 1) {
-            return 4U << pid;
+            return 8U << pid;
         } else {
             return 0;
         }
@@ -66,7 +67,7 @@ class memusage {
     }
     // return one of the processes set in a mark
     static int marked_pid(unsigned v) {
-        return lsb(v >> 3);
+        return lsb(v >> 4);
     }
     // print an error about a page table
     void page_error(uintptr_t pa, const char* desc, int pid) const;
@@ -109,11 +110,10 @@ void memusage::refresh() {
 
             for (vmiter it(p, 0); it.va() < VA_LOWEND; ) {
                 if (it.user()) {
-                    if (it.va() == it.pa()) {
-                        mark(it.pa(), f_user | pidflag);
-                    } else {
-                        mark(it.pa(), f_user | f_nonidentity | pidflag);
-                    }
+                    unsigned flags = f_user | pidflag;
+                    if (it.va() != it.pa()) flags |= f_nonidentity;
+                    if (it.cow()) flags |= f_copyonwrite;
+                    mark(it.pa(), flags);
                     it.next();
                 } else {
                     it.next_range();
@@ -157,15 +157,18 @@ void memusage::page_error(uintptr_t pa, const char* desc, int pid) const {
 uint16_t memusage::symbol_at(uintptr_t pa) const {
     bool is_reserved = reserved_physical_address(pa);
     bool is_kernel = !is_reserved && !allocatable_physical_address(pa);
+    bool is_newpage = pa == NEWPAGE_ADDR;
 
     unsigned pn = pa / PAGESIZE;
     if (pn < NPAGES && !physpages[pn].valid()) {
         // The newpage may have more than one reference per process
-        if (pa != NEWPAGE_ADDR) page_error(pa, "invalid reference count", -1);
+        if (!is_newpage) page_error(pa, "invalid reference count", -1);
     }
 
     if (pa >= maxpa) {
-        if (is_kernel) {
+        if (is_newpage) {
+            return '0' | 0x0B00;
+        } else if (is_kernel) {
             return 'K' | 0x4000;
         } else if (is_reserved) {
             return '?' | 0x4000;
@@ -189,13 +192,15 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
         return 'R' | 0x0C00;
     } else if (is_reserved) {
         return 'R' | 0x0700;
-    } else if (is_kernel && pid != 0 && separate_tables_) {
+    } else if (is_kernel && !is_newpage && pid != 0 && separate_tables_) {
         page_error(pa, "kernel data page mapped for user", marked_pid(v));
         return 'K' | 0xCD00;
-    } else if (is_kernel) {
+    } else if (is_kernel && !is_newpage) {
         return 'K' | 0x0D00;
     } else if (pa >= MEMSIZE_PHYSICAL) {
         return ' ' | 0x0700;
+    } else if (is_newpage) {
+        return '0' | 0x0B00;
     } else {
         auto vx = v & ~f_nonidentity;
         if (vx == 0) {
@@ -228,8 +233,14 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
                 ch |= 0xF000;
             }
             if (v > (f_process(pid) | f_kernel | f_user | f_nonidentity)) {
-                // shared page
-                ch = 'S' | 0x0F00;
+                // Copy-on-write page
+                if ((v & f_copyonwrite) == f_copyonwrite) {
+                    ch = 'W' | 0x0300;
+                
+                // Shared page
+                } else {
+                    ch = 'S' | 0x0F00;
+                }
             } else {
                 // non-shared page
                 static const char names[] = "K123456789ABCDEFGHIJKLMNOPQRST??";

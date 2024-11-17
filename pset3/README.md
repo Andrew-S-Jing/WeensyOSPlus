@@ -12,4 +12,7 @@ Grading notes (if any)
 
 Extra credit attempted (if any)
 -------------------------------
-Copy-on-write: strict overcommit policy
+Copy-on-write: strict overcommit policy. (Denoted in the memviewer as `W`)
+Universal newpage (anonymous mapping): `syscall_page_alloc` commits a
+    copy-on-write, zeroed page (currently at address `0x1000`) to the user,
+    rather than calling `kalloc` every time. (Denoted in the memviewer as `0`)
