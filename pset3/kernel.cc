@@ -476,10 +476,6 @@ uintptr_t syscall(regstate* regs) {
     // If Control-C was typed, exit the virtual machine.
     check_keyboard();
 
-    uintptr_t va_ = current->regs.reg_rdi;
-    uintptr_t val_ = current->regs.reg_rsi;
-    uintptr_t pa_ = vmiter(current->pagetable, va_).pa();
-
     // Actually handle the exception.
     switch (regs->reg_rax) {
 
@@ -503,11 +499,6 @@ uintptr_t syscall(regstate* regs) {
     case SYSCALL_EXIT:
         kcleanup(current->pid);
         schedule();             // does not return
-
-    case SYSCALL_DEBUG:
-        log_printf("\npid=%d\npa=%p, va=%p, val: x=%x lu=%lu\n\n",
-            current->pid, pa_, va_, val_, val_);
-        return 0;
 
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
@@ -560,32 +551,25 @@ int syscall_page_alloc(uintptr_t addr) {
     if (inaccessible) return -3;
     if (misaligned) return -4;
 
-    log_printf("\npid=%d\n", current->pid);
-
     // Map newpage to user pagetable if enough pages committable for
     // both the new mem page and any new pagetable page(s)
     if (ncommitted >= NCOMMITTABLE) return -1;
     int nptp_needed = 0;
-    log_printf("l4 ptp=%p\n", current->pagetable);
     x86_64_pageentry_t l4_entry = current
                                       ->pagetable
                                       ->entry[lvlx_index(addr, 4)];
-    log_printf("l4 pte=%d\n", l4_entry);
     if (!(l4_entry & PTE_P)) {
         nptp_needed = 3;
     } else {
-        log_printf("l3 ptp=%p\n", pte_next_down(l4_entry));
         x86_64_pageentry_t l3_entry = ((x86_64_pagetable*) pte_next_down(l4_entry))
                                           ->entry[lvlx_index(addr, 3)];
         if (!(l3_entry & PTE_P)) nptp_needed = 2;
         else {
-            log_printf("l2 ptp=%p\n", pte_next_down(l3_entry));
             x86_64_pageentry_t l2_entry = ((x86_64_pagetable*) pte_next_down(l3_entry))
                                               ->entry[lvlx_index(addr, 2)];
             if (!(l2_entry & PTE_P)) nptp_needed = 1;
         }
     }
-    log_printf("nptp_needed=%d\n", nptp_needed);
     if (ncommitted + nptp_needed >= NCOMMITTABLE) return -2;
 
     vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, PTE_PCU);
