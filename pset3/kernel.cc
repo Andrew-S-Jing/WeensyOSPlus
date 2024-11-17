@@ -374,7 +374,7 @@ void exception(regstate* regs) {
         uintptr_t addr = rdcr2();
 
         // Write permission faults
-        if ((regs->reg_errcode & (PTE_P | PTE_W)) == (PTE_P | PTE_W)) {
+        if ((regs->reg_errcode & PTE_PWU) == PTE_PWU) {
             uintptr_t va = addr - (addr & PAGEOFFMASK);
             vmiter pte(current->pagetable, va);
             assert(pte.pa());
