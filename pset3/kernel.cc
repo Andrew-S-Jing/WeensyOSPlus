@@ -587,7 +587,7 @@ int syscall_page_alloc(uintptr_t addr) {
 
     // Confirm enough committable for both mem pages and pagetable pages
     int nptp_needed = level_present - 1;
-    if (ncommitted + nptp_needed >= NCOMMITTABLE) return -2;
+    if (ncommitted + nptp_needed > NCOMMITTABLE) return -2;
 
     // Map newpage, commit a future cloned newpage, should never fail
     vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, PTE_PCU);
