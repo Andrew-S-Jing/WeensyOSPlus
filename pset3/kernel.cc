@@ -80,6 +80,9 @@ void kernel_start(const char* command) {
     // clear screen
     console_clear();
 
+    // zero the universal newpage
+    memset((void*) NEWPAGE_ADDR, 0, PAGESIZE);
+
     // (re-)initialize kernel page table
     for (uintptr_t addr = 0; addr < MEMSIZE_PHYSICAL; addr += PAGESIZE) {
         int perm = PTE_PWU;
@@ -153,6 +156,7 @@ void* kalloc(size_t sz) {
     for (int tries = 0; tries != NPAGES; ++tries) {
         uintptr_t pa = pageno * PAGESIZE;
         if (allocatable_physical_address(pa)
+                && pa != NEWPAGE_ADDR
                 && physpages[pageno].refcount == 0) {
             ++physpages[pageno].refcount;
             ++ncommitted;
@@ -383,8 +387,10 @@ void exception(regstate* regs) {
             if (pte.cow()) {
                 assert(pte.writable() != pte.cow());
 
-                // Do not free the ref page completely (`kalloc` will wipe mem)
-                if (physpages[pte.pa() / PAGESIZE].refcount == 1) {
+                // Do not free the ref page completely (`kalloc` will wipe mem),
+                // but also never assign write access to the newpage
+                if (pte.pa() != NEWPAGE_ADDR
+                        && physpages[pte.pa() / PAGESIZE].refcount == 1) {
                     pte.map(pte.kptr(), PTE_PWU);
                     break;
                 }
@@ -470,6 +476,9 @@ uintptr_t syscall(regstate* regs) {
     // If Control-C was typed, exit the virtual machine.
     check_keyboard();
 
+    uintptr_t va_ = current->regs.reg_rdi;
+    uintptr_t val_ = current->regs.reg_rsi;
+    uintptr_t pa_ = vmiter(current->pagetable, va_).pa();
 
     // Actually handle the exception.
     switch (regs->reg_rax) {
@@ -495,6 +504,11 @@ uintptr_t syscall(regstate* regs) {
         kcleanup(current->pid);
         schedule();             // does not return
 
+    case SYSCALL_DEBUG:
+        log_printf("\npid=%d\npa=%p, va=%p, val: x=%x lu=%lu\n\n",
+            current->pid, pa_, va_, val_, val_);
+        return 0;
+
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
                    regs->reg_rax, current->pid, regs->reg_rip);
@@ -502,6 +516,27 @@ uintptr_t syscall(regstate* regs) {
     }
 
     panic("Should not get here!\n");
+}
+
+
+// lvlx_index(addr, x)
+//    Returns the the level `x` index of physical address `addr`
+//    Per WeensyOS's design, there are only levels `1` through `4`
+
+int lvlx_index(uintptr_t addr, int x) {
+    assert(x >= 1 && x <= 4);
+    uintptr_t lvlx_total_mask = (1UL << (x * PAGEINDEXBITS + PAGEOFFBITS)) - 1;
+    uintptr_t lvlx_mask = lvlx_total_mask & ~PAGEOFFMASK;
+    return (addr & lvlx_mask) >> x * PAGEINDEXBITS;
+}
+
+
+// pte_next_down(pte)
+//    Translates a pagetable entry into the accessible pointer represented
+
+void* pte_next_down(x86_64_pageentry_t pte) {
+    uintptr_t total_mask = (1UL << (4 * PAGEINDEXBITS + PAGEOFFBITS)) - 1;
+    return (void*) (pte & (total_mask & ~PAGEOFFMASK));
 }
 
 
@@ -525,12 +560,37 @@ int syscall_page_alloc(uintptr_t addr) {
     if (inaccessible) return -3;
     if (misaligned) return -4;
 
-    // Map allocated page to user pagetable
-    int r = kpage_alloc(current->pid, addr, PTE_PWU);
-    if (r != 0) return r;
-    void* kptr = vmiter(current->pagetable, addr).kptr();
-    assert(kptr);
-    memset(kptr, 0, PAGESIZE);
+    log_printf("\npid=%d\n", current->pid);
+
+    // Map newpage to user pagetable if enough pages committable for
+    // both the new mem page and any new pagetable page(s)
+    if (ncommitted >= NCOMMITTABLE) return -1;
+    int nptp_needed = 0;
+    log_printf("l4 ptp=%p\n", current->pagetable);
+    x86_64_pageentry_t l4_entry = current
+                                      ->pagetable
+                                      ->entry[lvlx_index(addr, 4)];
+    log_printf("l4 pte=%d\n", l4_entry);
+    if (!(l4_entry & PTE_P)) {
+        nptp_needed = 3;
+    } else {
+        log_printf("l3 ptp=%p\n", pte_next_down(l4_entry));
+        x86_64_pageentry_t l3_entry = ((x86_64_pagetable*) pte_next_down(l4_entry))
+                                          ->entry[lvlx_index(addr, 3)];
+        if (!(l3_entry & PTE_P)) nptp_needed = 2;
+        else {
+            log_printf("l2 ptp=%p\n", pte_next_down(l3_entry));
+            x86_64_pageentry_t l2_entry = ((x86_64_pagetable*) pte_next_down(l3_entry))
+                                              ->entry[lvlx_index(addr, 2)];
+            if (!(l2_entry & PTE_P)) nptp_needed = 1;
+        }
+    }
+    log_printf("nptp_needed=%d\n", nptp_needed);
+    if (ncommitted + nptp_needed >= NCOMMITTABLE) return -2;
+
+    vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, PTE_PCU);
+    ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
+    ++ncommitted;
 
     return 0;
 }

@@ -44,6 +44,9 @@ void process_main() {
             for (unsigned long* l = (unsigned long*) heap_top;
                  l != (unsigned long*) (heap_top + PAGESIZE);
                  ++l) {
+                if (*l != 0) {
+                    make_syscall(SYSCALL_DEBUG, (uintptr_t) l, *l);
+                }
                 assert(*l == 0);
             }
             // check we can write to new page

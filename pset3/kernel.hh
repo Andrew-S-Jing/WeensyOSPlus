@@ -43,6 +43,9 @@ extern proc ptable[PID_MAX];
 // First application-accessible address
 #define PROC_START_ADDR         0x100000
 
+// Universal newpage (zeroed page for anonymous mapping/allocation)
+#define NEWPAGE_ADDR            0x1000
+
 // Physical memory size
 #define MEMSIZE_PHYSICAL        0x200000
 // Number of physical pages

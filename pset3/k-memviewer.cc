@@ -160,7 +160,7 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
 
     unsigned pn = pa / PAGESIZE;
     if (pn < NPAGES && !physpages[pn].valid()) {
-        page_error(pa, "invalid reference count", -1);
+        if (pa != NEWPAGE_ADDR) page_error(pa, "invalid reference count", -1);
     }
 
     if (pa >= maxpa) {
