@@ -35,6 +35,9 @@ ssize_t ncommittable() {
     for (uintptr_t pa = 0; pa < MEMSIZE_VIRTUAL; pa += PAGESIZE) {
         if (allocatable_physical_address(pa)) ++count;
     }
+    #ifdef NEWPAGE_ADDR
+    --count;
+    #endif
     used = true;
     return count;
 }
