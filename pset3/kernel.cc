@@ -35,6 +35,7 @@ ssize_t ncommittable() {
     for (uintptr_t pa = 0; pa < MEMSIZE_VIRTUAL; pa += PAGESIZE) {
         if (allocatable_physical_address(pa)) ++count;
     }
+    used = true;
     return count;
 }
 static const ssize_t NCOMMITTABLE = ncommittable();
