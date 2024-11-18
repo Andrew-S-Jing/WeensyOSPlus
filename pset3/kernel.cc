@@ -271,6 +271,7 @@ void process_setup(pid_t pid, const char* program_name) {
             .try_map(k_pte.pa(), k_pte.perm());
         assert(r == 0);
     }
+    ++physpages[CONSOLE_ADDR / PAGESIZE].refcount;
 
     // obtain reference to program image
     // (The program image models the process executable.)
