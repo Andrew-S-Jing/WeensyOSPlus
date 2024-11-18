@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <atomic>
 
 // io61.cc
 //    YOUR CODE HERE!
@@ -27,8 +28,11 @@ struct io61_file {
     off_t end_tag;   // offset one past last valid character in `cbuf`
 
     // Positioned mode
-    bool dirty = false;       // has cache been written?
-    bool positioned = false;  // is cache in positioned mode?
+    std::atomic<bool> dirty = false;        // has cache been written?
+    bool positioned = false;                // is cache in positioned mode?
+    
+    // Lock
+    std::recursive_mutex m;                 // Locks the whole file
 };
 
 
@@ -370,7 +374,7 @@ static int io61_pfill(io61_file* f, off_t off) {
 //    block: if the lock cannot be acquired, it returns -1 right away.
 
 int io61_try_lock(io61_file* f, off_t off, off_t len, int locktype) {
-    (void) f;
+    return f->m.try_lock() - 1;
     assert(off >= 0 && len >= 0);
     assert(locktype == LOCK_EX || locktype == LOCK_SH);
     if (len == 0) {
@@ -409,7 +413,8 @@ int io61_lock(io61_file* f, off_t off, off_t len, int locktype) {
 //    Returns 0 on success and -1 on error.
 
 int io61_unlock(io61_file* f, off_t off, off_t len) {
-    (void) f;
+    f->m.unlock();
+    return 0;
     assert(off >= 0 && len >= 0);
     if (len == 0) {
         return 0;
