@@ -37,17 +37,7 @@ struct io61_file {
     
     // Lock
     std::recursive_mutex* locks;            // One lock per `BLOCKSIZE` bytes
-
-    io61_file();
-    ~io61_file();
 };
-io61_file::io61_file() {
-    size = io61_filesize(this);
-    locks = new std::recursive_mutex[size / BLOCKSIZE + (size & BLOCKOFFMASK)];
-}
-io61_file::~io61_file() {
-    delete locks;
-}
 
 
 // io61_fdopen(fd, mode)
@@ -70,6 +60,13 @@ io61_file* io61_fdopen(int fd, int mode) {
         f->tag = f->pos_tag = f->end_tag = 0;
     }
     f->dirty = f->positioned = false;
+    f->size = io61_filesize(f);
+    if (f->size >= 0) {
+        size_t nblocks = f->size / BLOCKSIZE + (f->size & BLOCKOFFMASK);
+        f->locks = new std::recursive_mutex[nblocks];
+    } else {
+        f->locks = new std::recursive_mutex[1];
+    }
     return f;
 }
 
@@ -80,6 +77,7 @@ io61_file* io61_fdopen(int fd, int mode) {
 int io61_close(io61_file* f) {
     io61_flush(f);
     int r = close(f->fd);
+    delete f->locks;
     delete f;
     return r;
 }
@@ -398,6 +396,7 @@ int io61_try_lock(io61_file* f, off_t off, off_t len, int locktype) {
     }
 
     // Lock all blocks in range
+    if (f->size == -1) return f->locks->try_lock() - 1;
     size_t lastblock = (off + len - 1) / BLOCKSIZE;
     size_t firstblock = off / BLOCKSIZE;
     size_t cursor = firstblock;
@@ -452,9 +451,13 @@ int io61_unlock(io61_file* f, off_t off, off_t len) {
     }
 
     // Unlock all blocks in range
-    size_t lastblock = (off + len - 1) / BLOCKSIZE;
-    size_t firstblock = off / BLOCKSIZE;
-    for (size_t i = firstblock; i <= lastblock; ++i) f->locks[i].unlock();
+    if (f->size == -1) {
+        f->locks->unlock();
+    } else {
+        size_t lastblock = (off + len - 1) / BLOCKSIZE;
+        size_t firstblock = off / BLOCKSIZE;
+        for (size_t i = firstblock; i <= lastblock; ++i) f->locks[i].unlock();
+    }
 
     return 0;
 }
