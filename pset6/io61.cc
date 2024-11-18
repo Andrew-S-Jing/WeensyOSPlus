@@ -11,6 +11,9 @@
 // io61.cc
 //    YOUR CODE HERE!
 
+#define BLOCKSIZE    16 // # bytes associated with one elt in `io61_file::locks`
+#define BLOCKOFFMASK (BLOCKSIZE - 1)
+
 
 // io61_file
 //    Data structure for io61 file wrappers.
@@ -19,6 +22,7 @@ struct io61_file {
     int fd = -1;     // file descriptor
     int mode;        // O_RDONLY, O_WRONLY, or O_RDWR
     bool seekable;   // is this file seekable?
+    off_t size;      // file size
 
     // Single-slot cache
     static constexpr off_t cbufsz = 8192;
@@ -32,8 +36,18 @@ struct io61_file {
     bool positioned = false;                // is cache in positioned mode?
     
     // Lock
-    std::recursive_mutex m;                 // Locks the whole file
+    std::recursive_mutex* locks;            // One lock per `BLOCKSIZE` bytes
+
+    io61_file();
+    ~io61_file();
 };
+io61_file::io61_file() {
+    size = io61_filesize(this);
+    locks = new std::recursive_mutex[size / BLOCKSIZE + (size & BLOCKOFFMASK)];
+}
+io61_file::~io61_file() {
+    delete locks;
+}
 
 
 // io61_fdopen(fd, mode)
@@ -374,13 +388,30 @@ static int io61_pfill(io61_file* f, off_t off) {
 //    block: if the lock cannot be acquired, it returns -1 right away.
 
 int io61_try_lock(io61_file* f, off_t off, off_t len, int locktype) {
-    return f->m.try_lock() - 1;
+
+    // Entry
     assert(off >= 0 && len >= 0);
     assert(locktype == LOCK_EX || locktype == LOCK_SH);
+    assert(locktype == LOCK_EX);                // `LOCK_SH` not implemented
     if (len == 0) {
         return 0;
     }
-    return 0;
+
+    // Lock all blocks in range
+    size_t lastblock = (off + len - 1) / BLOCKSIZE;
+    size_t firstblock = off / BLOCKSIZE;
+    size_t cursor = firstblock;
+    while (cursor <= lastblock) {
+        if (!f->locks[cursor].try_lock()) break;
+        ++cursor;
+    }
+
+    // Success
+    if (cursor > lastblock) return 0;
+
+    // Fail
+    for (size_t i = firstblock; i < cursor; ++i) f->locks[i].unlock();
+    return -1;
 }
 
 
@@ -413,12 +444,18 @@ int io61_lock(io61_file* f, off_t off, off_t len, int locktype) {
 //    Returns 0 on success and -1 on error.
 
 int io61_unlock(io61_file* f, off_t off, off_t len) {
-    f->m.unlock();
-    return 0;
+
+    // Entry
     assert(off >= 0 && len >= 0);
     if (len == 0) {
         return 0;
     }
+
+    // Unlock all blocks in range
+    size_t lastblock = (off + len - 1) / BLOCKSIZE;
+    size_t firstblock = off / BLOCKSIZE;
+    for (size_t i = firstblock; i <= lastblock; ++i) f->locks[i].unlock();
+
     return 0;
 }
 
