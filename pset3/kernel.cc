@@ -222,6 +222,7 @@ void kfree_pagetable(x86_64_pagetable* pt) {
 //    and during a `SYSCALL_EXIT` exception in `syscall()`.
 
 void kcleanup(pid_t pid) {
+    assert(pid > 0 && pid < PID_MAX && ptable[pid].state != P_FREE);
     kfree_pagetable(ptable[pid].pagetable);
     ptable[pid].pagetable = nullptr;
     memset(&ptable[pid].regs, 0, sizeof(regstate));
@@ -500,6 +501,16 @@ uintptr_t syscall(regstate* regs) {
 
     case SYSCALL_EXIT:
         kcleanup(current->pid);
+        schedule();             // does not return
+
+    case SYSCALL_KILL:
+        if (current->regs.reg_rdi < 1
+                || current->regs.reg_rdi >= PID_MAX
+                || ptable[current->regs.reg_rdi].state == P_FREE) {
+            return -1;
+        }
+        kcleanup(current->regs.reg_rdi);
+        if (ptable[current->pid].state == P_RUNNABLE) return 0;
         schedule();             // does not return
 
     default:

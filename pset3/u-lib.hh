@@ -122,6 +122,12 @@ inline pid_t sys_fork() {
     }
 }
 
+// sys_kill(unfortunate_soul)
+//    Kill a guy (if said guy exists)
+inline pid_t sys_kill(pid_t unfortunate_soul) {
+    return make_syscall(SYSCALL_KILL, (uintptr_t) unfortunate_soul);
+}
+
 // sys_panic(msg)
 //    Panic.
 [[noreturn]] inline void sys_panic(const char* msg) {
