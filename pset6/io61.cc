@@ -426,13 +426,22 @@ int io61_try_lock(io61_file* f, off_t off, off_t len, int locktype) {
 //    error conditions, such as EDEADLK (a deadlock was detected).
 
 int io61_lock(io61_file* f, off_t off, off_t len, int locktype) {
+
+    // Entry
     assert(off >= 0 && len >= 0);
     assert(locktype == LOCK_EX || locktype == LOCK_SH);
+    assert(locktype == LOCK_EX);                // `LOCK_SH` not implemented
     if (len == 0) {
         return 0;
     }
-    // The handout code polls using `io61_try_lock`.
-    while (io61_try_lock(f, off, len, locktype) != 0) {
+
+    // Lock all blocks in range
+    if (f->size == -1) f->locks->lock();
+    else { 
+        size_t lastblock = (off + len - 1) / BLOCKSIZE;
+        size_t firstblock = off / BLOCKSIZE;
+        size_t cursor = firstblock;
+        while (cursor <= lastblock) f->locks[cursor++].lock();
     }
     return 0;
 }
