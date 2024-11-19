@@ -32,10 +32,11 @@ struct io61_file {
     off_t end_tag;   // offset one past last valid character in `cbuf`
 
     // Positioned mode
-    std::atomic<bool> dirty = false;        // has cache been written?
+    bool dirty = false;                     // has cache been written?
     bool positioned = false;                // is cache in positioned mode?
     
-    // Lock
+    // Locks
+    std::recursive_mutex biglock;           // Coarse-grained lock for I/O
     std::recursive_mutex* locks;            // One lock per `BLOCKSIZE` bytes
 };
 
@@ -92,6 +93,7 @@ int io61_close(io61_file* f) {
 static int io61_fill(io61_file* f);
 
 int io61_readc(io61_file* f) {
+    std::unique_lock l(f->biglock);
     assert(!f->positioned);
     if (f->pos_tag == f->end_tag) {
         io61_fill(f);
@@ -116,6 +118,7 @@ int io61_readc(io61_file* f) {
 //    This is called a “short read.”
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
+    std::unique_lock l(f->biglock);
     assert(!f->positioned);
     size_t nread = 0;
     while (nread != sz) {
@@ -142,6 +145,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on error.
 
 int io61_writec(io61_file* f, int c) {
+    std::unique_lock l(f->biglock);
     assert(!f->positioned);
     if (f->pos_tag == f->tag + f->cbufsz) {
         int r = io61_flush(f);
@@ -165,6 +169,7 @@ int io61_writec(io61_file* f, int c) {
 //    before the error occurred.
 
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
+    std::unique_lock l(f->biglock);
     assert(!f->positioned);
     size_t nwritten = 0;
     while (nwritten != sz) {
@@ -201,6 +206,7 @@ static int io61_flush_dirty_positioned(io61_file* f);
 static int io61_flush_clean(io61_file* f);
 
 int io61_flush(io61_file* f) {
+    std::unique_lock l(f->biglock);
     if (f->dirty && f->positioned) {
         return io61_flush_dirty_positioned(f);
     } else if (f->dirty) {
@@ -216,6 +222,7 @@ int io61_flush(io61_file* f) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
+    std::unique_lock l(f->biglock);
     int r = io61_flush(f);
     if (r == -1) {
         return -1;
@@ -237,6 +244,7 @@ int io61_seek(io61_file* f, off_t off) {
 //    -1 on error. Used only for non-positioned files.
 
 static int io61_fill(io61_file* f) {
+    std::unique_lock l(f->biglock);
     assert(f->tag == f->end_tag && f->pos_tag == f->end_tag);
     ssize_t nr;
     while (true) {
@@ -256,6 +264,7 @@ static int io61_fill(io61_file* f) {
 //    Helper functions for io61_flush.
 
 static int io61_flush_dirty(io61_file* f) {
+    std::unique_lock l(f->biglock);
     // Called when `f`’s cache is dirty and not positioned.
     // Uses `write`; assumes that the initial file position equals `f->tag`.
     off_t flush_tag = f->tag;
@@ -274,6 +283,7 @@ static int io61_flush_dirty(io61_file* f) {
 }
 
 static int io61_flush_dirty_positioned(io61_file* f) {
+    std::unique_lock l(f->biglock);
     // Called when `f`’s cache is dirty and positioned.
     // Uses `pwrite`; does not change file position.
     off_t flush_tag = f->tag;
@@ -291,6 +301,7 @@ static int io61_flush_dirty_positioned(io61_file* f) {
 }
 
 static int io61_flush_clean(io61_file* f) {
+    std::unique_lock l(f->biglock);
     // Called when `f`’s cache is clean.
     if (!f->positioned && f->seekable) {
         if (lseek(f->fd, f->pos_tag, SEEK_SET) == -1) {
@@ -316,6 +327,7 @@ static int io61_pfill(io61_file* f, off_t off);
 
 ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
                    off_t off) {
+    std::unique_lock l(f->biglock);
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
         if (io61_pfill(f, off) == -1) {
             return -1;
@@ -337,6 +349,7 @@ ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
 
 ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
                     off_t off) {
+    std::unique_lock l(f->biglock);
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
         if (io61_pfill(f, off) == -1) {
             return -1;
@@ -355,6 +368,7 @@ ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
 //    The handout code rounds `off` down to a multiple of 8192.
 
 static int io61_pfill(io61_file* f, off_t off) {
+    std::unique_lock l(f->biglock);
     assert(f->mode == O_RDWR);
     if (f->dirty && io61_flush(f) == -1) {
         return -1;
