@@ -94,6 +94,7 @@ int io61_close(io61_file* f) {
 static int io61_fill(io61_file* f);
 
 int io61_readc(io61_file* f) {
+    std::unique_lock lockbox_lock{f->lockbox};
     assert(!f->positioned);
     if (f->pos_tag == f->end_tag) {
         io61_fill(f);
@@ -118,6 +119,7 @@ int io61_readc(io61_file* f) {
 //    This is called a “short read.”
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
+    std::unique_lock lockbox_lock{f->lockbox};
     assert(!f->positioned);
     size_t nread = 0;
     while (nread != sz) {
@@ -144,6 +146,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on error.
 
 int io61_writec(io61_file* f, int c) {
+    std::unique_lock lockbox_lock{f->lockbox};
     assert(!f->positioned);
     if (f->pos_tag == f->tag + f->cbufsz) {
         int r = io61_flush(f);
@@ -167,6 +170,7 @@ int io61_writec(io61_file* f, int c) {
 //    before the error occurred.
 
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
+    std::unique_lock lockbox_lock{f->lockbox};
     assert(!f->positioned);
     size_t nwritten = 0;
     while (nwritten != sz) {
@@ -203,6 +207,7 @@ static int io61_flush_dirty_positioned(io61_file* f);
 static int io61_flush_clean(io61_file* f);
 
 int io61_flush(io61_file* f) {
+    std::unique_lock lockbox_lock{f->lockbox};
     if (f->dirty && f->positioned) {
         return io61_flush_dirty_positioned(f);
     } else if (f->dirty) {
@@ -218,6 +223,7 @@ int io61_flush(io61_file* f) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
+    std::unique_lock lockbox_lock{f->lockbox};
     int r = io61_flush(f);
     if (r == -1) {
         return -1;
@@ -239,6 +245,7 @@ int io61_seek(io61_file* f, off_t off) {
 //    -1 on error. Used only for non-positioned files.
 
 static int io61_fill(io61_file* f) {
+    std::unique_lock lockbox_lock{f->lockbox};
     assert(f->tag == f->end_tag && f->pos_tag == f->end_tag);
     ssize_t nr;
     while (true) {
@@ -318,6 +325,7 @@ static int io61_pfill(io61_file* f, off_t off);
 
 ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
                    off_t off) {
+    std::unique_lock lockbox_lock{f->lockbox};
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
         if (io61_pfill(f, off) == -1) {
             return -1;
@@ -339,6 +347,7 @@ ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
 
 ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
                     off_t off) {
+    std::unique_lock lockbox_lock{f->lockbox};
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
         if (io61_pfill(f, off) == -1) {
             return -1;
@@ -357,6 +366,7 @@ ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
 //    The handout code rounds `off` down to a multiple of 8192.
 
 static int io61_pfill(io61_file* f, off_t off) {
+    std::unique_lock lockbox_lock{f->lockbox};
     assert(f->mode == O_RDWR);
     if (f->dirty && io61_flush(f) == -1) {
         return -1;
@@ -400,11 +410,11 @@ int io61_try_lock(io61_file* f, off_t off, off_t len, int locktype) {
     // For unsized files, `f->lockbox` is the only lock
     if (!f->sized) {
         assert(f->locks.empty());
-        return f->lockbox.try_lock() - 1;
+        return (int) f->lockbox.try_lock() - 1;
     }
 
     // Acquire lockbox
-    std::unique_lock (f->lockbox);
+    std::unique_lock lockbox_lock{f->lockbox};
 
     // Search through locks
     off_t first = off;
@@ -462,7 +472,7 @@ int io61_lock(io61_file* f, off_t off, off_t len, int locktype) {
     }
 
     // Acquire lockbox
-    std::unique_lock lockbox_lock(f->lockbox);
+    std::unique_lock lockbox_lock{f->lockbox};
 
     // Wait for lock slot to be available
     off_t first = off;
@@ -530,7 +540,7 @@ int io61_unlock(io61_file* f, off_t off, off_t len) {
     }
 
     // Acquire lockbox
-    std::unique_lock (f->lockbox);
+    std::unique_lock lockbox_lock{f->lockbox};
 
     // Unlock
     off_t first = off;
