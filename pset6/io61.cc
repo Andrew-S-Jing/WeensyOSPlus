@@ -12,9 +12,6 @@
 // io61.cc
 //    YOUR CODE HERE!
 
-#define BLOCKSIZE    16 // # bytes associated with one elt in `io61_file::locks`
-#define BLOCKOFFMASK (BLOCKSIZE - 1)
-
 
 // io61_file
 //    Data structure for io61 file wrappers.
