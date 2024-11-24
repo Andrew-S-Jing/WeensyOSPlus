@@ -6,7 +6,6 @@
 #include <condition_variable>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <atomic>
 
 // io61.cc
 //    YOUR CODE HERE!
