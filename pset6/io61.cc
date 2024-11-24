@@ -402,6 +402,7 @@ int io61_try_lock(io61_file* f, off_t off, off_t len, int locktype) {
     assert(off >= 0 && len >= 0);
     assert(locktype == LOCK_EX);                // `LOCK_SH` not implemented
     if (len == 0) return 0;
+    if (off < 0 || len < 0 || off + len < 0 || off + len > f->size) return -1;
 
     // Lock all blocks in range
     if (f->size == -1) return f->manual_locks->try_lock() - 1;
@@ -439,6 +440,7 @@ int io61_lock(io61_file* f, off_t off, off_t len, int locktype) {
     assert(off >= 0 && len >= 0);
     assert(locktype == LOCK_EX);                // `LOCK_SH` not implemented
     if (len == 0) return 0;
+    if (off < 0 || len < 0 || off + len < 0 || off + len > f->size) return -1;
 
     // Lock all blocks in range
     if (f->size == -1) f->manual_locks->lock();
@@ -462,6 +464,7 @@ int io61_unlock(io61_file* f, off_t off, off_t len) {
     // Entry
     assert(off >= 0 && len >= 0);
     if (len == 0) return 0;
+    if (off < 0 || len < 0 || off + len < 0 || off + len > f->size) return -1;
 
     // Unlock all blocks in range
     if (f->size == -1) {
