@@ -7,10 +7,12 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <atomic>
-#include <list>
 
 // io61.cc
 //    YOUR CODE HERE!
+
+#define BLOCKSIZE    16 // # bytes associated with one elt in `io61_file::locks`
+#define BLOCKOFFMASK (BLOCKSIZE - 1)
 
 
 // io61_file
@@ -20,7 +22,7 @@ struct io61_file {
     int fd = -1;     // file descriptor
     int mode;        // O_RDONLY, O_WRONLY, or O_RDWR
     bool seekable;   // is this file seekable?
-    bool sized;      // file size
+    off_t size;      // file size
 
     // Single-slot cache
     static constexpr off_t cbufsz = 8192;
@@ -30,19 +32,12 @@ struct io61_file {
     off_t end_tag;   // offset one past last valid character in `cbuf`
 
     // Positioned mode
-    bool dirty = false;                 // has cache been written?
-    bool positioned = false;            // is cache in positioned mode?
+    bool dirty = false;                     // has cache been written?
+    bool positioned = false;                // is cache in positioned mode?
     
     // Locks
-    std::recursive_mutex lockbox;       // Master lock for file
-                                        // Acts the sole lock for unsized files
-                                        // or for automatically locked I/O
-    std::list<std::pair<off_t,off_t>> locks;
-                                        // Each lock elt in `locks` looks like
-                                        // `<first_byte, last_byte>`
-    std::condition_variable_any locks_update;
-                                        // Conditional is notified whenever any
-                                        // lock in `locks` is *removed*
+    std::recursive_mutex io_lock;           // Coarse-grained lock for I/O
+    std::recursive_mutex* manual_locks;     // One lock per `BLOCKSIZE` bytes
 };
 
 
@@ -66,7 +61,13 @@ io61_file* io61_fdopen(int fd, int mode) {
         f->tag = f->pos_tag = f->end_tag = 0;
     }
     f->dirty = f->positioned = false;
-    f->sized = io61_filesize(f) != -1;
+    f->size = io61_filesize(f);
+    if (f->size >= 0) {
+        size_t nblocks = f->size / BLOCKSIZE + (f->size & BLOCKOFFMASK);
+        f->manual_locks = new std::recursive_mutex[nblocks];
+    } else {
+        f->manual_locks = new std::recursive_mutex[1];
+    }
     return f;
 }
 
@@ -77,6 +78,7 @@ io61_file* io61_fdopen(int fd, int mode) {
 int io61_close(io61_file* f) {
     io61_flush(f);
     int r = close(f->fd);
+    delete f->manual_locks;
     delete f;
     return r;
 }
@@ -91,7 +93,7 @@ int io61_close(io61_file* f) {
 static int io61_fill(io61_file* f);
 
 int io61_readc(io61_file* f) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     assert(!f->positioned);
     if (f->pos_tag == f->end_tag) {
         io61_fill(f);
@@ -116,7 +118,7 @@ int io61_readc(io61_file* f) {
 //    This is called a “short read.”
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     assert(!f->positioned);
     size_t nread = 0;
     while (nread != sz) {
@@ -143,7 +145,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on error.
 
 int io61_writec(io61_file* f, int c) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     assert(!f->positioned);
     if (f->pos_tag == f->tag + f->cbufsz) {
         int r = io61_flush(f);
@@ -167,7 +169,7 @@ int io61_writec(io61_file* f, int c) {
 //    before the error occurred.
 
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     assert(!f->positioned);
     size_t nwritten = 0;
     while (nwritten != sz) {
@@ -204,7 +206,7 @@ static int io61_flush_dirty_positioned(io61_file* f);
 static int io61_flush_clean(io61_file* f);
 
 int io61_flush(io61_file* f) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     if (f->dirty && f->positioned) {
         return io61_flush_dirty_positioned(f);
     } else if (f->dirty) {
@@ -220,7 +222,7 @@ int io61_flush(io61_file* f) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     int r = io61_flush(f);
     if (r == -1) {
         return -1;
@@ -242,7 +244,7 @@ int io61_seek(io61_file* f, off_t off) {
 //    -1 on error. Used only for non-positioned files.
 
 static int io61_fill(io61_file* f) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     assert(f->tag == f->end_tag && f->pos_tag == f->end_tag);
     ssize_t nr;
     while (true) {
@@ -322,7 +324,7 @@ static int io61_pfill(io61_file* f, off_t off);
 
 ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
                    off_t off) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
         if (io61_pfill(f, off) == -1) {
             return -1;
@@ -344,7 +346,7 @@ ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
 
 ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
                     off_t off) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
         if (io61_pfill(f, off) == -1) {
             return -1;
@@ -363,7 +365,7 @@ ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
 //    The handout code rounds `off` down to a multiple of 8192.
 
 static int io61_pfill(io61_file* f, off_t off) {
-    std::unique_lock lockbox_lock{f->lockbox};
+    std::unique_lock unique_lil_guy{f->io_lock};
     assert(f->mode == O_RDWR);
     if (f->dirty && io61_flush(f) == -1) {
         return -1;
@@ -398,45 +400,25 @@ int io61_try_lock(io61_file* f, off_t off, off_t len, int locktype) {
 
     // Entry
     assert(off >= 0 && len >= 0);
-    assert(locktype == LOCK_EX || locktype == LOCK_SH);
     assert(locktype == LOCK_EX);                // `LOCK_SH` not implemented
-    if (len == 0) {
-        return 0;
+    if (len == 0) return 0;
+
+    // Lock all blocks in range
+    if (f->size == -1) return f->manual_locks->try_lock() - 1;
+    size_t lastblock = (off + len - 1) / BLOCKSIZE;
+    size_t firstblock = off / BLOCKSIZE;
+    size_t cursor = firstblock;
+    while (cursor <= lastblock) {
+        if (!f->manual_locks[cursor].try_lock()) break;
+        ++cursor;
     }
 
-    // For unsized files, `f->lockbox` is the only lock
-    if (!f->sized) {
-        assert(f->locks.empty());
-        return (int) f->lockbox.try_lock() - 1;
-    }
+    // Success
+    if (cursor > lastblock) return 0;
 
-    // Acquire lockbox
-    std::unique_lock lockbox_lock{f->lockbox};
-
-    // Search through locks
-    off_t first = off;
-    off_t last = off + len - 1;
-    bool locked = false;
-    for (auto it = f->locks.begin(); it != f->locks.end(); ++it) {
-        off_t it_first = (*it).first;
-        off_t it_last = (*it).second;
-
-        // Early lock slot found, no conflicting lock exists
-        if (it_first > last) {
-            f->locks.insert(it, {first, last});
-            locked = true;
-            break;
-
-        // Found conflicting lock
-        } else if ((it_first >= first && it_first <= last)
-                       || (it_last >= first && it_last <= last)) {
-            return -1;
-        }
-    }
-    // No conflicting lock found
-    if (!locked) f->locks.push_back({first, last});
-    
-    return 0;
+    // Fail
+    for (size_t i = firstblock; i < cursor; ++i) f->manual_locks[i].unlock();
+    return -1;
 }
 
 
@@ -455,61 +437,18 @@ int io61_lock(io61_file* f, off_t off, off_t len, int locktype) {
 
     // Entry
     assert(off >= 0 && len >= 0);
-    assert(locktype == LOCK_EX || locktype == LOCK_SH);
     assert(locktype == LOCK_EX);                // `LOCK_SH` not implemented
-    if (len == 0) {
-        return 0;
+    if (len == 0) return 0;
+
+    // Lock all blocks in range
+    if (f->size == -1) f->manual_locks->lock();
+    else { 
+        size_t lastblock = (off + len - 1) / BLOCKSIZE;
+        size_t firstblock = off / BLOCKSIZE;
+        size_t cursor = firstblock;
+        while (cursor <= lastblock) f->manual_locks[cursor++].lock();
     }
 
-    // For unsized files, `f->lockbox` is the only lock
-    if (!f->sized) {
-        assert(f->locks.empty());
-        f->lockbox.lock();
-        return 0;
-    }
-
-    // Acquire lockbox
-    std::unique_lock lockbox_lock{f->lockbox};
-
-    // Wait for lock slot to be available
-    off_t first = off;
-    off_t last = off + len - 1;
-    bool locked = false;
-    bool conflict;
-    while (!locked) {
-        conflict = false;
-
-        // Search through all locks
-        for (auto it = f->locks.begin(); it != f->locks.end(); ++it) {
-            off_t it_first = (*it).first;
-            off_t it_last = (*it).second;
-
-            // Early lock slot found, no conflicting lock exists
-            if (it_first > last) {
-                f->locks.insert(it, {first, last});
-                locked = true;
-                break;
-
-            // Found conflicting lock
-            } else if ((it_first >= first && it_first <= last)
-                        || (it_last >= first && it_last <= last)) {
-                conflict = true;
-                break;
-            }
-        }
-
-        // Wait for any removals from `f->locks`
-        if (conflict) {
-            assert(!locked);
-            f->locks_update.wait(lockbox_lock);
-
-        // No conflicting lock found
-        } else if (!locked) {
-            f->locks.push_back({first, last});
-            locked = true;
-        }
-    }
-    
     return 0;
 }
 
@@ -517,47 +456,24 @@ int io61_lock(io61_file* f, off_t off, off_t len, int locktype) {
 // io61_unlock(f, off, len)
 //    Release the lock on offsets `[off, off + len)` in file `f`.
 //    Returns 0 on success and -1 on error.
-//
-//    `off` and `len` must *exactly* match the arguments of a previous
-//    call to `io61_lock` or `io61_try_lock`, on pain of `assert(false)`.
 
 int io61_unlock(io61_file* f, off_t off, off_t len) {
 
     // Entry
     assert(off >= 0 && len >= 0);
-    if (len == 0) {
-        return 0;
-    }
+    if (len == 0) return 0;
 
-    // For unsized files, `f->lockbox` is the only lock
-    if (!f->sized) {
-        assert(f->locks.empty());
-        f->lockbox.unlock();
-        return 0;
-    }
-
-    // Acquire lockbox
-    std::unique_lock lockbox_lock{f->lockbox};
-
-    // Unlock
-    off_t first = off;
-    off_t last = off + len - 1;
-    bool locked = true;
-    for (auto it = f->locks.begin(); it != f->locks.end(); ++it) {
-        off_t it_first = (*it).first;
-        off_t it_last = (*it).second;
-
-        // Lock found
-        if (it_first == first && it_last == last) {
-            f->locks.erase(it);
-            locked = false;
-            break;
+    // Unlock all blocks in range
+    if (f->size == -1) {
+        f->manual_locks->unlock();
+    } else {
+        size_t lastblock = (off + len - 1) / BLOCKSIZE;
+        size_t firstblock = off / BLOCKSIZE;
+        for (size_t i = firstblock; i <= lastblock; ++i) {
+            f->manual_locks[i].unlock();
         }
     }
-    assert(!locked);
 
-    // Notify and return
-    f->locks_update.notify_all();
     return 0;
 }
 
