@@ -58,11 +58,43 @@ __always_inline uintptr_t make_syscall(int syscallno, uintptr_t arg0,
                                        uintptr_t arg1, uintptr_t arg2,
                                        uintptr_t arg3) {
     register uintptr_t rax asm("rax") = syscallno;
-    register uintptr_t r10 asm("r10") = arg3;
+    register uintptr_t r8 asm("r8") = arg3;
     asm volatile ("syscall"
-            : "+a" (rax), "+D" (arg0), "+S" (arg1), "+d" (arg2), "+r" (r10)
+            : "+a" (rax), "+D" (arg0), "+S" (arg1), "+d" (arg2), "+r" (r8)
             :
-            : "cc", "rcx", "r8", "r9", "r11");
+            : "cc", "rcx", "r9", "r10", "r11");
+    return rax;
+}
+
+__always_inline uintptr_t make_syscall(int syscallno, uintptr_t arg0,
+                                       uintptr_t arg1, uintptr_t arg2,
+                                       uintptr_t arg3, uintptr_t arg4) {
+    register uintptr_t rax asm("rax") = syscallno;
+    register uintptr_t r8 asm("r8") = arg3;
+    register uintptr_t r9 asm("r9") = arg4;
+
+    asm volatile ("syscall"
+            : "+a" (rax), "+D" (arg0), "+S" (arg1), "+d" (arg2),
+                          "+r" (r8), "+r" (r9)
+            :
+            : "cc", "rcx", "r10", "r11");
+    return rax;
+}
+
+__always_inline uintptr_t make_syscall(int syscallno, uintptr_t arg0,
+                                       uintptr_t arg1, uintptr_t arg2,
+                                       uintptr_t arg3, uintptr_t arg4,
+                                       uintptr_t arg5) {
+    register uintptr_t rax asm("rax") = syscallno;
+    register uintptr_t r10 asm("r8") = arg3;
+    register uintptr_t r8 asm("r9") = arg4;
+    register uintptr_t r9 asm("r10") = arg5;
+
+    asm volatile ("syscall"
+            : "+a" (rax), "+D" (arg0), "+S" (arg1), "+d" (arg2),
+                          "+r" (r8), "+r" (r9), "+r" (r10)
+            :
+            : "cc", "rcx", "r11");
     return rax;
 }
 
@@ -101,6 +133,13 @@ inline void sys_yield() {
 //    are not met, returns a negative error code without modifying memory.
 inline int sys_page_alloc(void* addr) {
     return make_syscall(SYSCALL_PAGE_ALLOC, (uintptr_t) addr);
+}
+
+// sys_mmap(addr, length, prot, flags, fd, offset)
+inline int sys_mmap(void* addr, size_t length, int prot, int flags,
+                    int fd, off_t offset) {
+    return make_syscall(SYSCALL_MMAP,
+                        (uintptr_t) addr, length, prot, flags, fd, offset);
 }
 
 // sys_fork()

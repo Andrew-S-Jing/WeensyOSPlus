@@ -442,9 +442,9 @@ void exception(regstate* regs) {
 
 
 // These functions are defined farther below
+int syscall_mmap(uintptr_t addr);
 int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                  int fd, off_t offset);
-int syscall_page_alloc(uintptr_t addr);
 pid_t syscall_fork();
 
 
@@ -495,8 +495,16 @@ uintptr_t syscall(regstate* regs) {
         current->regs.reg_rax = 0;
         schedule();             // does not return
 
+    case SYSCALL_MMAP:
+        return syscall_mmap(current->regs.reg_rdi,
+                            current->regs.reg_rsi,
+                            current->regs.reg_rdx,
+                            current->regs.reg_r8,
+                            current->regs.reg_r9,
+                            current->regs.reg_r10);
+
     case SYSCALL_PAGE_ALLOC:
-        return syscall_page_alloc(current->regs.reg_rdi);
+        return syscall_mmap(current->regs.reg_rdi);
 
     case SYSCALL_FORK:
         return syscall_fork();
@@ -558,8 +566,62 @@ void* pte_next_down(x86_64_pageentry_t pte) {
 }
 
 
+// syscall_mmap(addr)
+//    Handles the `SYSCALL_PAGE_ALLOC` system call.
+//    Implements the specification for `sys_page_alloc` in `u-lib.hh`.
+//
+//    Returns:
+//      Success: returns  `0`
+//      Errors:  returns `-1` on failed mem page allocation
+//               returns `-2` on failed pagetable page allocation
+//               returns `-3` on permission denied to kernel virt memspace
+//               returns `-4` on misaligned addr
+
+int syscall_mmap(uintptr_t addr) {
+
+    // Fail on misaligned or kernel memspace virt addr
+    bool misaligned, inaccessible;
+    inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
+    misaligned = (addr & PAGEOFFMASK) != 0;
+    if (inaccessible) return -3;
+    if (misaligned) return -4;
+
+    // Map newpage to user pagetable if enough pages committable for
+    // both the new mem page and any new pagetable page(s)
+    if (ncommitted >= NCOMMITTABLE) return -1;
+
+    // Calculate the lowest level pagetable page that has the PTE for `addr`
+    int level_present = NPTLEVELS;                  // Top level always present
+    x86_64_pagetable* ptp = current->pagetable;
+    while (level_present != 1) {
+        x86_64_pageentry_t pte = ptp->entry[lvlx_index(addr, level_present)];
+
+        // Next pagetable page is present (in a lower level)
+        if (pte & PTE_P) {
+            --level_present;
+            ptp = (x86_64_pagetable*) pte_next_down(pte);
+
+        // No lower pagetable page
+        } else {
+            break;
+        }
+    }
+
+    // Confirm enough committable for both mem pages and pagetable pages
+    int nptp_needed = level_present - 1;
+    if (ncommitted + nptp_needed > NCOMMITTABLE) return -2;
+
+    // Map newpage, commit a future cloned newpage, should never fail
+    vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, PTE_PCU);
+    ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
+    ++ncommitted;
+
+    return 0;
+}
+
+
 // syscall_mmap(addr, length, prot, flags, fd, offset)
-//    Handles the SYSCALL_MMAP system call......
+//    Handles the `SYSCALL_MMAP` system call......
 //    **CURRENTLY ONLY USES `addr`, REST OF ARGS TO BE IMPLEMENTED**
 
 int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
@@ -605,27 +667,6 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     ++ncommitted;
 
     return 0;
-}
-
-
-// syscall_page_alloc(addr)
-//    Handles the SYSCALL_PAGE_ALLOC system call. Implements the specification
-//    for `sys_page_alloc` in `u-lib.hh`.
-//
-//    Returns:
-//      Success: returns  `0`
-//      Errors:  returns `-1` on failed mem page allocation
-//               returns `-2` on failed pagetable page allocation
-//               returns `-3` on permission denied to kernel virt memspace
-//               returns `-4` on misaligned addr
-
-int syscall_page_alloc(uintptr_t addr) {
-    return syscall_mmap(addr,
-                        PAGESIZE,
-                        MAP_ANON | MAP_PRIVATE,
-                        PROT_READ | PROT_WRITE | PROT_EXEC,
-                        -1,
-                        0);
 }
 
 
