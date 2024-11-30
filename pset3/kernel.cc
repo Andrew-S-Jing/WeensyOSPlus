@@ -442,6 +442,8 @@ void exception(regstate* regs) {
 
 
 // These functions are defined farther below
+int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
+                 int fd, off_t offset);
 int syscall_page_alloc(uintptr_t addr);
 pid_t syscall_fork();
 
@@ -556,18 +558,14 @@ void* pte_next_down(x86_64_pageentry_t pte) {
 }
 
 
-// syscall_page_alloc(addr)
-//    Handles the SYSCALL_PAGE_ALLOC system call. Implements the specification
-//    for `sys_page_alloc` in `u-lib.hh`.
-//
-//    Returns:
-//      Success: returns  `0`
-//      Errors:  returns `-1` on failed mem page allocation
-//               returns `-2` on failed pagetable page allocation
-//               returns `-3` on permission denied to kernel virt memspace
-//               returns `-4` on misaligned addr
+// syscall_mmap(addr, length, prot, flags, fd, offset)
+//    Handles the SYSCALL_MMAP system call......
+//    **CURRENTLY ONLY USES `addr`, REST OF ARGS TO BE IMPLEMENTED**
 
-int syscall_page_alloc(uintptr_t addr) {
+int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
+                 int fd, off_t offset) {
+
+    (void) length, (void) prot, (void) flags, (void) fd, (void) offset;
 
     // Fail on misaligned or kernel memspace virt addr
     bool misaligned, inaccessible;
@@ -607,6 +605,27 @@ int syscall_page_alloc(uintptr_t addr) {
     ++ncommitted;
 
     return 0;
+}
+
+
+// syscall_page_alloc(addr)
+//    Handles the SYSCALL_PAGE_ALLOC system call. Implements the specification
+//    for `sys_page_alloc` in `u-lib.hh`.
+//
+//    Returns:
+//      Success: returns  `0`
+//      Errors:  returns `-1` on failed mem page allocation
+//               returns `-2` on failed pagetable page allocation
+//               returns `-3` on permission denied to kernel virt memspace
+//               returns `-4` on misaligned addr
+
+int syscall_page_alloc(uintptr_t addr) {
+    return syscall_mmap(addr,
+                        PAGESIZE,
+                        MAP_ANON | MAP_PRIVATE,
+                        PROT_READ | PROT_WRITE | PROT_EXEC,
+                        -1,
+                        0);
 }
 
 

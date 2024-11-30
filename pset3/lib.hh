@@ -233,6 +233,21 @@ inline uint32_t crc32c(const void* buf, size_t sz) {
 
 #define E_MINERROR      -100
 
+
+// Definitions for `syscall_mmap`
+// Protections
+#define PROT_READ	0x1		/* Page can be read.  */
+#define PROT_WRITE	0x2		/* Page can be written.  */
+#define PROT_EXEC	0x4		/* Page can be executed.  */
+#define PROT_NONE	0x0		/* Page can not be accessed.  */
+
+// Mappings
+#define MAP_SHARED	0x01		/* Share changes.  */
+#define MAP_PRIVATE	0x02		/* Changes are private.  */
+#define MAP_ANONYMOUS	0x20	/* Don't use a file.  */
+#define MAP_ANON	MAP_ANONYMOUS
+
+
 inline bool is_error(uintptr_t r) {
     return r >= static_cast<uintptr_t>(E_MINERROR);
 }
