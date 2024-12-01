@@ -74,8 +74,8 @@ void process_main() {
             sys_exit();
         } else if (sys_mmap(nullptr,
                             PAGESIZE,
-                            MAP_ANON | MAP_PRIVATE,
                             PROT_READ | PROT_WRITE | PROT_EXEC,
+                            MAP_ANON | MAP_PRIVATE,
                             -1,
                             0)
                    >= 0) {

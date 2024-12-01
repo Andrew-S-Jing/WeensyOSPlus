@@ -624,14 +624,18 @@ int syscall_mmap(uintptr_t addr) {
 //    Handles the `SYSCALL_MMAP` system call......
 //    If `addr == nullptr`, current implementation allocates a page at
 //    the top of the user heap.
+//    `prot` can be `PROT_NONE`, `PROT_READ`, or `PROT_WRITE`.
+//    `PROT_WRITE` implies read/write permissions. `PROT_EXEC` not implemented.
+//    If files are implemented, `prot` must be checked against
+//    the underlying file permissions.
 //    **CURRENTLY ONLY USES `addr`, REST OF ARGS TO BE IMPLEMENTED**
 
 int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                  int fd, off_t offset) {
 
-   assert(fd == -1);           // File mapping not implemented
+    assert(fd == -1);           // File mapping not implemented
 
-    (void) length, (void) prot, (void) flags, (void) fd, (void) offset;
+    (void) length, (void) flags, (void) fd, (void) offset;
 
     // `addr == nullptr`, so must decide the virt addr to map onto
     if (!addr) {
@@ -680,7 +684,11 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     if (ncommitted + nptp_needed > NCOMMITTABLE) return -2;
 
     // Map newpage, commit a future cloned newpage, should never fail
-    vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, PTE_PCU);
+    int perm = PROT_NONE;
+    if (prot == PROT_NONE);
+    else if ((prot & PROT_WRITE) == PROT_WRITE) perm = PTE_PCU;
+    else if ((prot & PROT_READ) == PROT_READ) perm = PTE_P | PTE_U;
+    vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, perm);
     ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
     ++ncommitted;
 
