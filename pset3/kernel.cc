@@ -44,6 +44,14 @@ static const ssize_t NCOMMITTABLE = ncommittable();
 static ssize_t ncommitted = 0;
 
 
+// multflag(flags, desired_flags)
+//    Returns true iff all flags set in `desired_flags` are all set in `flags`
+
+bool multflag(int flags, int desired_flags) {
+    return (flags & desired_flags) == desired_flags;
+}
+
+
 #define PROC_SIZE 0x40000       // initial state only
 
 proc ptable[PID_MAX];           // array of process descriptors
@@ -179,7 +187,7 @@ void* kalloc(size_t sz) {
 void kfree(void* kptr, bool cow) {
     if (!kptr) return;
     uintptr_t pa = reinterpret_cast<uintptr_t>(kptr);
-    assert((pa & PAGEOFFBITS) == 0);
+    assert(!(pa & PAGEOFFBITS));
     int pageno = pa / PAGESIZE;
     assert(physpages[pageno].used());
     --physpages[pageno].refcount;
@@ -382,7 +390,7 @@ void exception(regstate* regs) {
         uintptr_t addr = rdcr2();
 
         // Write permission faults
-        if ((regs->reg_errcode & PTE_PWU) == PTE_PWU) {
+        if (multflag(regs->reg_errcode, PTE_PWU)) {
             uintptr_t va = addr - (addr & PAGEOFFMASK);
             vmiter pte(current->pagetable, va);
             assert(pte.pa());
@@ -583,7 +591,7 @@ int syscall_mmap(uintptr_t addr) {
     // Fail on misaligned or kernel memspace virt addr
     bool misaligned, inaccessible;
     inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
-    misaligned = (addr & PAGEOFFMASK) != 0;
+    misaligned = addr & PAGEOFFMASK;
     if (inaccessible) return -3;
     if (misaligned) return -4;
 
@@ -643,7 +651,7 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     (void) length, (void) flags, (void) fd, (void) offset;
 
     // Check flags for `MAP_PRIVATE` xor `MAP_SHARED`
-    if (((flags & MAP_PRIVATE) == MAP_PRIVATE) == ((flags & MAP_SHARED) == MAP_SHARED)) {
+    if ((bool) (flags & MAP_PRIVATE) == (bool) (flags & MAP_SHARED)) {
         return -1234;           // Must be one or the other
     }
 
@@ -664,7 +672,7 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     // Fail on misaligned or kernel memspace virt addr
     bool misaligned, inaccessible;
     inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
-    misaligned = (addr & PAGEOFFMASK) != 0;
+    misaligned = addr & PAGEOFFMASK;
     if (inaccessible) return -3;
     if (misaligned) return -4;
 
@@ -694,16 +702,16 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     if (ncommitted + nptp_needed > NCOMMITTABLE) return -2;
 
     // Map newpage, commit a future cloned newpage, should never fail
-    if ((flags & MAP_ANON) == MAP_ANON) {
+    if (flags & MAP_ANON) {
         int perm = 0;
         if (prot == PROT_NONE);
-        else if ((prot & PROT_WRITE) == PROT_WRITE) perm = PTE_PU_PRIV;
-        else if ((prot & PROT_READ) == PROT_READ) perm = PTE_PU;
-        if ((flags & MAP_PRIVATE) == MAP_PRIVATE || ((flags & MAP_SHARED) == MAP_SHARED && perm != PTE_PU_PRIV)) {
+        else if (prot & PROT_WRITE) perm = PTE_PU_PRIV;
+        else if (prot & PROT_READ) perm = PTE_PU;
+        if ((flags & MAP_PRIVATE) || ((flags & MAP_SHARED) && perm != PTE_PU_PRIV)) {
             vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, perm);
             ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
             ++ncommitted;
-        } else if ((flags & MAP_SHARED) == MAP_SHARED) {
+        } else if (flags & MAP_SHARED) {
             void* pa = kalloc(PAGESIZE);
             memset(pa, 0, PAGESIZE);
             vmiter(current->pagetable, addr).map(pa, PTE_PWU);
