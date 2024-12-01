@@ -622,12 +622,30 @@ int syscall_mmap(uintptr_t addr) {
 
 // syscall_mmap(addr, length, prot, flags, fd, offset)
 //    Handles the `SYSCALL_MMAP` system call......
+//    If `addr == nullptr`, current implementation allocates a page at
+//    the top of the user heap.
 //    **CURRENTLY ONLY USES `addr`, REST OF ARGS TO BE IMPLEMENTED**
 
 int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                  int fd, off_t offset) {
 
+   assert(fd == -1);           // File mapping not implemented
+
     (void) length, (void) prot, (void) flags, (void) fd, (void) offset;
+
+    // `addr == nullptr`, so must decide the virt addr to map onto
+    if (!addr) {
+        // Find a free range of virt addrs that can fit `PAGESIZE` bytes
+        for (uintptr_t cursor = PROC_START_ADDR;
+                 cursor < MEMSIZE_VIRTUAL;
+                 cursor += PAGESIZE) {
+            if (!vmiter(current->pagetable, cursor).present()) {
+                addr = cursor;
+                break;
+            }
+        }
+        if (!addr) return -42069;        // Not enough virt mem?!?!
+    }
 
     // Fail on misaligned or kernel memspace virt addr
     bool misaligned, inaccessible;

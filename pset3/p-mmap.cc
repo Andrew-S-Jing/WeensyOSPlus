@@ -72,7 +72,7 @@ void process_main() {
             }
         } else if (x < 3) {
             sys_exit();
-        } else if (sys_mmap((void*) heap_top,
+        } else if (sys_mmap(nullptr,
                             PAGESIZE,
                             MAP_ANON | MAP_PRIVATE,
                             PROT_READ | PROT_WRITE | PROT_EXEC,
