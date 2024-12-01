@@ -44,9 +44,12 @@ class vmiter {
     inline bool present() const;
     // Return true iff `this->va()` is present and writable (`PTE_P|PTE_W`)
     inline bool writable() const;
+    // Return true iff `this->va()` is private (`PTE_PRIV`)
+    inline bool priv() const;
     // Return true iff `this->va()` is flagged for copy-on-write (`PTE_COW`)
     inline bool cow() const;
-    // Return true iff `this->va()` is present and unprivileged (`PTE_P|PTE_U`)
+    // Return true iff `this->va()` is present and unprivileged (`PTE_P|PTE_U`),
+    // implying that `this->va()` is readable
     inline bool user() const;
 
     // ADVANCED PERMISSIONS
@@ -229,6 +232,9 @@ inline bool vmiter::present() const {
 }
 inline bool vmiter::writable() const {
     return perm(PTE_P | PTE_W);
+}
+inline bool vmiter::priv() const {
+    return perm(PTE_PRIV);
 }
 inline bool vmiter::cow() const {
     return perm(PTE_COW);

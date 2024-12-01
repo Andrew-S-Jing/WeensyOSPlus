@@ -22,6 +22,7 @@
 #define PTE_P           0x1UL    // entry is Present
 #define PTE_W           0x2UL    // entry is Writeable
 #define PTE_U           0x4UL    // entry is User-accessible
+#define PTE_PU          0x5UL    // PTE_P | PTE_U
 #define PTE_PWU         0x7UL    // PTE_P | PTE_W | PTE_U
 // Accessed flags: automatically turned on by processor
 #define PTE_A           0x20UL   // entry was Accessed (read/written)
@@ -37,8 +38,12 @@
 #define PTE_OS3         0x800UL
 // There are other flags too! Including mine for copy-on-write! :)
 // I *am* the OS, so I will be using the PTE_OS1 flag for myself
-#define PTE_COW         0x200UL  // entry is copy-on-write (PTE_OS1)
-#define PTE_PCU         0x205UL  // PTE_P | PTE_COW | PTE_U
+#define PTE_PRIV        PTE_OS1         // entry is private (`PTE_OS1`)
+#define PTE_COW         PTE_PRIV        // entry is copy-on-write (`PTE_PRIV`)
+#define PTE_PU_PRIV     0x205UL         // PTE_P | PTE_U | PTE_PRIV
+#define PTE_PU_COW      PTE_PU_PRIV     // PTE_P | PTE_U | PTE_COW
+#define PTE_PWU_PRIV    0x207UL         // PTE_P | PTE_W | PTE_U | PTE_PRIV
+#define PTE_PWU_COW     PTE_PWU_PRIV    // PTE_P | PTE_W | PTE_U | PTE_COW
 
 #define PTE_PAMASK      0x000FFFFFFFFFF000UL // physical address in non-PS entry
 #define PTE_PS_PAMASK   0x000FFFFFFFFFE000UL // physical address in PS entry

@@ -85,7 +85,7 @@ void kernel_start(const char* command) {
     // zero the universal newpage
     memset((void*) NEWPAGE_ADDR, 0, PAGESIZE);
 
-    // (re-)initialize kernel page table
+    // (re-)initialize kernel page table (kernel pages are shared)
     for (uintptr_t addr = 0; addr < MEMSIZE_PHYSICAL; addr += PAGESIZE) {
         int perm = PTE_PWU;
         if (addr == 0) {
@@ -171,9 +171,10 @@ void* kalloc(size_t sz) {
 }
 
 
-// kfree(kptr)
+// kfree(kptr, cow)
 //    Free `kptr`, which must have been previously returned by `kalloc`.
-//    If `kptr == nullptr` does nothing.
+//    If `kptr == nullptr`, does nothing.
+//    Decommits as needed, always decommits a page if copy-on-write (`cow`).
 
 void kfree(void* kptr, bool cow) {
     if (!kptr) return;
@@ -183,7 +184,7 @@ void kfree(void* kptr, bool cow) {
     assert(physpages[pageno].used());
     --physpages[pageno].refcount;
 
-    // Page completely freed or every ref is a committed page (copy-on-write)
+    // Page completely freed or is copy-on-write (private)
     if (cow || (pa != CONSOLE_ADDR && physpages[pageno].refcount == 0)) {
         --ncommitted;
     }
@@ -292,8 +293,8 @@ void process_setup(pid_t pid, const char* program_name) {
                  a < seg.va() + seg.size();
                  a += PAGESIZE) {
             
-            // Allocate and map
-            int perm = seg.writable() ? PTE_PWU : PTE_P | PTE_U;
+            // Allocate and map (writable segments are private)
+            int perm = seg.writable() ? PTE_PWU_PRIV : PTE_PU;
             int r = kpage_alloc(pid, a, perm);
             assert (r == 0);
 
@@ -327,8 +328,8 @@ void process_setup(pid_t pid, const char* program_name) {
     uintptr_t va_last = MEMSIZE_VIRTUAL - 1;
     uintptr_t stack_addr = (va_last) - (va_last & PAGEOFFMASK);
     ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
-    // allocate and map stack segment
-    int r = kpage_alloc(pid, stack_addr, PTE_PWU);
+    // allocate and map stack segment (stack is private)
+    int r = kpage_alloc(pid, stack_addr, PTE_PWU_PRIV);
     assert(r == 0);
 
     // mark process as runnable
@@ -386,7 +387,7 @@ void exception(regstate* regs) {
             vmiter pte(current->pagetable, va);
             assert(pte.pa());
 
-            // Handle copy-on-write faults
+            // Handle copy-on-write faults (page is private)
             if (pte.cow()) {
                 assert(pte.writable() != pte.cow());
 
@@ -394,7 +395,7 @@ void exception(regstate* regs) {
                 // but also never assign write access to the newpage
                 if (pte.pa() != NEWPAGE_ADDR
                         && physpages[pte.pa() / PAGESIZE].refcount == 1) {
-                    pte.map(pte.kptr(), PTE_PWU);
+                    pte.map(pte.kptr(), PTE_PWU_PRIV);
                     break;
                 }
 
@@ -404,7 +405,7 @@ void exception(regstate* regs) {
                 kfree(kptr, true);
                 void* cowpage = kalloc(PAGESIZE);
                 assert(cowpage);
-                pte.map(cowpage, PTE_PWU);
+                pte.map(cowpage, PTE_PWU_PRIV);
                 memcpy(cowpage, kptr, PAGESIZE);
                 break;
             }
@@ -612,7 +613,7 @@ int syscall_mmap(uintptr_t addr) {
     if (ncommitted + nptp_needed > NCOMMITTABLE) return -2;
 
     // Map newpage, commit a future cloned newpage, should never fail
-    vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, PTE_PCU);
+    vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, PTE_PU_PRIV);
     ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
     ++ncommitted;
 
@@ -628,6 +629,7 @@ int syscall_mmap(uintptr_t addr) {
 //    `PROT_WRITE` implies read/write permissions. `PROT_EXEC` not implemented.
 //    If files are implemented, `prot` must be checked against
 //    the underlying file permissions.
+//    
 //    **CURRENTLY ONLY USES `addr`, REST OF ARGS TO BE IMPLEMENTED**
 
 int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
@@ -684,13 +686,25 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     if (ncommitted + nptp_needed > NCOMMITTABLE) return -2;
 
     // Map newpage, commit a future cloned newpage, should never fail
-    int perm = PROT_NONE;
-    if (prot == PROT_NONE);
-    else if ((prot & PROT_WRITE) == PROT_WRITE) perm = PTE_PCU;
-    else if ((prot & PROT_READ) == PROT_READ) perm = PTE_P | PTE_U;
-    vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, perm);
-    ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
-    ++ncommitted;
+    if ((flags & MAP_ANON) == MAP_ANON) {
+        int perm = 0;
+        if (prot == PROT_NONE);
+        else if ((prot & PROT_WRITE) == PROT_WRITE) perm = PTE_PU_PRIV;
+        else if ((prot & PROT_READ) == PROT_READ) perm = PTE_PU;
+        if ((flags & MAP_PRIVATE) == MAP_PRIVATE || ((flags & MAP_SHARED) == MAP_SHARED && perm != PTE_PU_PRIV)) {
+            vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, perm);
+            ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
+            ++ncommitted;
+        } else if ((flags & MAP_SHARED) == MAP_SHARED) {
+            void* pa = kalloc(PAGESIZE);
+            memset(pa, 0, PAGESIZE);
+            vmiter(current->pagetable, addr).map(pa, PTE_PWU);
+        } else {
+            return -69420;      // Must be either `MAP_PRIVATE` or `MAP_SHARED`
+        }
+    } else {
+        assert(false);          // files not implemented (must be `MAP_ANON`)
+    }
 
     return 0;
 }
@@ -734,18 +748,17 @@ pid_t syscall_fork() {
         // Child's PTE
         vmiter pte(ptable[pid].pagetable, it.va());
 
-        // Map kernel and read-only mem to same phys addr
+        // Map kernel, read-only, and explicitly shared writable mem
         if (it.va() < PROC_START_ADDR
-                || (it.user() && !it.writable() && !it.cow())) {
+                || (it.user() && !it.priv())) {
             if (pte.try_map(it.pa(), it.perm()) != 0) {
                 kcleanup(pid);
                 return -2;
             }
             if (it.user()) ++physpages[it.pa() / PAGESIZE].refcount;
 
-        // Map writable mem to same phys addr (mark for copy-on-write)
-        } else if (it.user() && (it.writable() || it.cow())) {
-            assert(it.present() && it.writable() != it.cow());
+        // Map private writable mem (mark for copy-on-write)
+        } else if (it.perm(PTE_U | PTE_PRIV)) {
 
             // Strict overcommit policy
             if (ncommitted >= NCOMMITTABLE) {
@@ -754,7 +767,7 @@ pid_t syscall_fork() {
             }
 
             // Map copy-on-write mem to child, commit a future cloned page
-            if (pte.try_map(it.pa(), PTE_PCU) != 0) {
+            if (pte.try_map(it.pa(), PTE_PU_PRIV) != 0) {
                 kcleanup(pid);
                 return -2;
             }
@@ -768,7 +781,7 @@ pid_t syscall_fork() {
             }
 
             // Parent permissions must also be copy-on-write
-            if (it.writable()) it.map(it.pa(), PTE_PCU);
+            if (it.writable()) it.map(it.pa(), PTE_PU_PRIV);
         }
     }
 

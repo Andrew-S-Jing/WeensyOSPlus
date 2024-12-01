@@ -112,7 +112,7 @@ void memusage::refresh() {
                 if (it.user()) {
                     unsigned flags = f_user | pidflag;
                     if (it.va() != it.pa()) flags |= f_nonidentity;
-                    if (it.cow()) flags |= f_copyonwrite;
+                    if (it.cow() && !it.writable()) flags |= f_copyonwrite;
                     mark(it.pa(), flags);
                     it.next();
                 } else {
