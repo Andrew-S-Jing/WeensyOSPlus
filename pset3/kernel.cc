@@ -629,7 +629,10 @@ int syscall_mmap(uintptr_t addr) {
 //    `PROT_WRITE` implies read/write permissions. `PROT_EXEC` not implemented.
 //    If files are implemented, `prot` must be checked against
 //    the underlying file permissions.
-//    
+//    Must have one or the other of `MAP_PRIVATE` and `MAP_SHARED`.
+//    If not `PROT_WRITE`, kernel will use `MAP_PRIVATE`.
+//    `MAP_PRIVATE` marks pages (if `PROT_WRITE`) for copy-on-write.
+//    `MAP_SHARED` shares pages (if `PROT_WRITE`) to not be process-isolated.
 //    **CURRENTLY ONLY USES `addr`, REST OF ARGS TO BE IMPLEMENTED**
 
 int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
@@ -638,6 +641,11 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     assert(fd == -1);           // File mapping not implemented
 
     (void) length, (void) flags, (void) fd, (void) offset;
+
+    // Check flags for `MAP_PRIVATE` xor `MAP_SHARED`
+    if (((flags & MAP_PRIVATE) == MAP_PRIVATE) == ((flags & MAP_SHARED) == MAP_SHARED)) {
+        return -1234;           // Must be one or the other
+    }
 
     // `addr == nullptr`, so must decide the virt addr to map onto
     if (!addr) {
