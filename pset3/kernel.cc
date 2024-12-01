@@ -638,7 +638,6 @@ int syscall_mmap(uintptr_t addr) {
 //    If files are implemented, `prot` must be checked against
 //    the underlying file permissions.
 //    Must have one or the other of `MAP_PRIVATE` and `MAP_SHARED`.
-//    If not `PROT_WRITE`, kernel will use `MAP_PRIVATE`.
 //    `MAP_PRIVATE` marks pages (if `PROT_WRITE`) for copy-on-write.
 //    `MAP_SHARED` shares pages (if `PROT_WRITE`) to not be process-isolated.
 //    **CURRENTLY ONLY USES `addr`, REST OF ARGS TO BE IMPLEMENTED**
@@ -701,22 +700,30 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     int nptp_needed = level_present - 1;
     if (ncommitted + nptp_needed > NCOMMITTABLE) return -2;
 
-    // Map newpage, commit a future cloned newpage, should never fail
+    // Decide permissions, default to `MAP_PRIVATE` if needed
+    // `PROT_EXEC` not yet implemented
+    int perm = 0;
+    if (prot == PROT_NONE) return -2345;        // No new pagetable mapping
+    else if (prot & PROT_WRITE) perm = PTE_PWU_PRIV;
+    else if (prot & PROT_READ) perm = PTE_PU;
+
+    // Map an anonymous page, should never fail
     if (flags & MAP_ANON) {
-        int perm = 0;
-        if (prot == PROT_NONE);
-        else if (prot & PROT_WRITE) perm = PTE_PU_PRIV;
-        else if (prot & PROT_READ) perm = PTE_PU;
-        if ((flags & MAP_PRIVATE) || ((flags & MAP_SHARED) && perm != PTE_PU_PRIV)) {
-            vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, perm);
-            ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
-            ++ncommitted;
-        } else if (flags & MAP_SHARED) {
+
+        // Map shared, writable page (newly allocated and zeroed page)
+        if ((bool) (flags & MAP_SHARED) && (bool) (prot & PROT_WRITE)) {
             void* pa = kalloc(PAGESIZE);
             memset(pa, 0, PAGESIZE);
             vmiter(current->pagetable, addr).map(pa, PTE_PWU);
+
+        // Map private page (newpage), commit a page for copy-on-write if needed
         } else {
-            return -69420;      // Must be either `MAP_PRIVATE` or `MAP_SHARED`
+            perm &= ~PTE_W;
+            vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, perm);
+            if (prot & PROT_WRITE) {
+                ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
+                ++ncommitted;
+            }
         }
     } else {
         assert(false);          // files not implemented (must be `MAP_ANON`)
