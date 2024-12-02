@@ -198,8 +198,11 @@ void kfree(void* kptr, bool is_private) {
     assert(physpages[pageno].used());
     --physpages[pageno].refcount;
 
-    // Page completely freed or is private
-    if (is_private || (pa != CONSOLE_ADDR && physpages[pageno].refcount == 0)) {
+    // Decommit if page is completely freed or is private
+    bool is_completely_freed = pa != CONSOLE_ADDR
+                            && pa != NEWPAGE_ADDR
+                            && physpages[pageno].refcount == 0;
+    if (is_private || is_completely_freed) {
         --ncommitted;
     }
     assert(ncommitted >= 0);
