@@ -843,7 +843,8 @@ void error_vprintf(int cpos, int color, const char* format, va_list val) {
 
 int check_keyboard() {
     int c = keyboard_readc();
-    if (c == 'a' || c == 'f' || c == 'e' || c == 'k' || c == 'n' || c == 'm' || c == 's') {
+    if (c == 'a' || c == 'f' || c == 'e'
+            || c == 'k' || c == 'n' || c == 'm' || c == 's' || c == 'r') {
         // Turn off the timer interrupt.
         init_timer(-1);
         // Install a temporary page table to carry us through the
@@ -872,6 +873,8 @@ int check_keyboard() {
             argument = "mmap";
         } else if (c == 's') {
             argument = "mmapshared";
+        } else if (c == 'r') {
+            argument = "mmaprandom";
         }
         uintptr_t argument_ptr = (uintptr_t) argument;
         assert(argument_ptr < 0x100000000L);
