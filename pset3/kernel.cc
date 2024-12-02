@@ -91,7 +91,12 @@ void kernel_start(const char* command) {
     console_clear();
 
     // zero the universal newpage
-    memset((void*) NEWPAGE_ADDR, 0, PAGESIZE);
+    memset(pa2kptr(NEWPAGE_ADDR), 0, PAGESIZE);
+    
+    // check that `physpageinfo::refcount` type can handle max refs to newpage
+    physpageinfo max;
+    --max.refcount;
+    assert(max.refcount >= PID_MAX * (MEMSIZE_VIRTUAL / PAGESIZE));
 
     // (re-)initialize kernel page table (kernel pages are shared)
     for (uintptr_t addr = 0; addr < MEMSIZE_PHYSICAL; addr += PAGESIZE) {
@@ -169,8 +174,9 @@ void* kalloc(size_t sz) {
                 && physpages[pageno].refcount == 0) {
             ++physpages[pageno].refcount;
             ++ncommitted;
-            memset((void*) pa, 0xCC, PAGESIZE);
-            return (void*) pa;
+            void* kptr = pa2kptr(pa);
+            memset(kptr, 0xCC, PAGESIZE);
+            return kptr;
         }
         pageno = (pageno + page_increment) % NPAGES;
     }
@@ -179,21 +185,21 @@ void* kalloc(size_t sz) {
 }
 
 
-// kfree(kptr, cow)
+// kfree(kptr, is_private)
 //    Free `kptr`, which must have been previously returned by `kalloc`.
 //    If `kptr == nullptr`, does nothing.
-//    Decommits as needed, always decommits a page if copy-on-write (`cow`).
+//    Decommits as needed, always decommits page for private (`is_private`).
 
-void kfree(void* kptr, bool cow) {
+void kfree(void* kptr, bool is_private) {
     if (!kptr) return;
-    uintptr_t pa = reinterpret_cast<uintptr_t>(kptr);
+    uintptr_t pa = kptr2pa(kptr);
     assert(!(pa & PAGEOFFBITS));
     int pageno = pa / PAGESIZE;
     assert(physpages[pageno].used());
     --physpages[pageno].refcount;
 
-    // Page completely freed or is copy-on-write (private)
-    if (cow || (pa != CONSOLE_ADDR && physpages[pageno].refcount == 0)) {
+    // Page completely freed or is private
+    if (is_private || (pa != CONSOLE_ADDR && physpages[pageno].refcount == 0)) {
         --ncommitted;
     }
     assert(ncommitted >= 0);
@@ -211,7 +217,7 @@ void kfree_pagetable(x86_64_pagetable* pt) {
 
     // Free virt pages
     for (vmiter it(pt, 0); !it.done(); it.next()) {
-        if (it.user()) kfree(it.kptr(), it.cow());
+        if (it.user()) kfree(it.kptr(), it.priv());
     }
 
     // Free level 1-3 pagetable pages
@@ -317,7 +323,7 @@ void process_setup(pid_t pid, const char* program_name) {
             if (is_first_page) {
                 uintptr_t offset = seg.va() - a;
                 size -= offset;
-                memcpy((void*) (pte.pa() + offset), cursor, size);
+                memcpy(pa2kptr(pte.pa() + offset), cursor, size);
                 is_first_page = false;
             } else {
                 memcpy(pte.kptr(), cursor, size);
@@ -395,7 +401,7 @@ void exception(regstate* regs) {
             vmiter pte(current->pagetable, va);
             assert(pte.pa());
 
-            // Handle copy-on-write faults (page is private)
+            // Handle copy-on-write faults, fresh page will also be private
             if (pte.cow()) {
                 assert(pte.writable() != pte.cow());
 
@@ -571,7 +577,7 @@ void* pte_next_down(x86_64_pageentry_t pte) {
     uintptr_t no_flags_mask = total_mask & ~PAGEOFFMASK;
     uintptr_t addr = pte & no_flags_mask;
     assert(!(addr & PAGEOFFMASK) && addr <= total_mask);
-    return (void*) addr;
+    return pa2kptr(addr);
 }
 
 
@@ -702,31 +708,38 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
 
     // Decide permissions, default to `MAP_PRIVATE` if needed
     // `PROT_EXEC` not yet implemented
-    int perm = 0;
-    if (prot == PROT_NONE) return -2345;        // No new pagetable mapping
-    else if (prot & PROT_WRITE) perm = PTE_PWU_PRIV;
-    else if (prot & PROT_READ) perm = PTE_PU;
+    int perm;
+    if (prot == PROT_NONE) return 0;        // No new mapping (success)
+    else {
+        perm = PTE_PU;
+        if (prot & PROT_WRITE) perm |= flags & MAP_PRIVATE ? PTE_PRIV : PTE_W;
+    }
 
     // Map an anonymous page, should never fail
     if (flags & MAP_ANON) {
+        bool use_newpage = !(flags & MAP_SHARED) || !(prot & PROT_WRITE);
+        uintptr_t pa = 0;
 
-        // Map shared, writable page (newly allocated and zeroed page)
-        if ((bool) (flags & MAP_SHARED) && (bool) (prot & PROT_WRITE)) {
-            void* pa = kalloc(PAGESIZE);
-            memset(pa, 0, PAGESIZE);
-            vmiter(current->pagetable, addr).map(pa, PTE_PWU);
+        // Set up private page (newpage), commit copy-on-write page if needed
+        if (use_newpage) {
+            pa = NEWPAGE_ADDR;
+            ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
+            if (prot & PROT_WRITE) ++ncommitted;
 
-        // Map private page (newpage), commit a page for copy-on-write if needed
+        // Set up writable page (newly allocated and zeroed page)
         } else {
-            perm &= ~PTE_W;
-            vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, perm);
-            if (prot & PROT_WRITE) {
-                ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
-                ++ncommitted;
-            }
+            void* kptr = kalloc(PAGESIZE);
+            memset(kptr, 0, PAGESIZE);
+            pa = kptr2pa(kptr);
         }
+
+        // Map
+        assert(pa);
+        vmiter(current->pagetable, addr).map(pa, perm);
+    
+    // Files not implemented (must be `MAP_ANON`)
     } else {
-        assert(false);          // files not implemented (must be `MAP_ANON`)
+        assert(false);
     }
 
     return 0;
@@ -772,8 +785,7 @@ pid_t syscall_fork() {
         vmiter pte(ptable[pid].pagetable, it.va());
 
         // Map kernel, read-only, and explicitly shared writable mem
-        if (it.va() < PROC_START_ADDR
-                || (it.user() && !it.priv())) {
+        if (it.va() < PROC_START_ADDR || (it.user() && !it.priv())) {
             if (pte.try_map(it.pa(), it.perm()) != 0) {
                 kcleanup(pid);
                 return -2;
@@ -781,7 +793,7 @@ pid_t syscall_fork() {
             if (it.user()) ++physpages[it.pa() / PAGESIZE].refcount;
 
         // Map private writable mem (mark for copy-on-write)
-        } else if (it.perm(PTE_U | PTE_PRIV)) {
+        } else if (it.user() && it.priv()) {
 
             // Strict overcommit policy
             if (ncommitted >= NCOMMITTABLE) {
