@@ -410,8 +410,8 @@ void exception(regstate* regs) {
             assert(pte.pa());
 
             // Handle copy-on-write faults, fresh page will also be private
-            if (pte.cow()) {
-                assert(pte.writable() != pte.cow());
+            if (pte.priv()) {
+                assert(pte.writable() != pte.priv());
 
                 // Do not free the ref page completely (`kalloc` will wipe mem),
                 // but also never assign write access to the newpage
