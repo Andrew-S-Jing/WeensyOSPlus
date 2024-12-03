@@ -34,14 +34,16 @@ ssize_t ncommittable() {
     static bool used = false;
     assert(!used);
     ssize_t count = 0;
-    for (uintptr_t pa = 0; pa < MEMSIZE_VIRTUAL; pa += PAGESIZE) {
+    for (uintptr_t pa = 0; pa < MEMSIZE_PHYSICAL; pa += PAGESIZE) {
         if (allocatable_physical_address(pa)) ++count;
     }
     used = true;
     return count;
 }
-static const ssize_t NCOMMITTABLE = ncommittable();
-static ssize_t ncommitted = 0;
+#define ncommit_t ssize_t
+#define NCOMMIT_MAX SSIZE_MAX
+const ncommit_t NCOMMITTABLE = ncommittable();
+ncommit_t ncommitted = 0;
 
 
 // multflag(flags, desired_flags)
@@ -89,6 +91,9 @@ void kernel_start(const char* command) {
 
     // clear screen
     console_clear();
+
+    // check that `ncommit_t` can handle all phys mem pages
+    assert(NCOMMIT_MAX >= NPAGES);
 
     // zero the universal newpage
     memset(pa2kptr(NEWPAGE_ADDR), 0, PAGESIZE);
@@ -522,7 +527,12 @@ uintptr_t syscall(regstate* regs) {
                             current->regs.reg_r10);
 
     case SYSCALL_PAGE_ALLOC:
-        return syscall_mmap(current->regs.reg_rdi);
+        return syscall_mmap(current->regs.reg_rdi,
+                            PAGESIZE,
+                            PROT_READ | PROT_WRITE | PROT_EXEC,
+                            MAP_PRIVATE | MAP_ANON,
+                            -1,
+                            0);
 
     case SYSCALL_FORK:
         return syscall_fork();
@@ -577,60 +587,6 @@ void* pte_next_down(x86_64_pageentry_t pte) {
 }
 
 
-// syscall_mmap(addr)
-//    Handles the `SYSCALL_PAGE_ALLOC` system call.
-//    Implements the specification for `sys_page_alloc` in `u-lib.hh`.
-//
-//    Returns:
-//      Success: returns  `0`
-//      Errors:  returns `-1` on failed mem page allocation
-//               returns `-2` on failed pagetable page allocation
-//               returns `-3` on permission denied to kernel virt memspace
-//               returns `-4` on misaligned addr
-
-int syscall_mmap(uintptr_t addr) {
-
-    // Fail on misaligned or kernel memspace virt addr
-    bool misaligned, inaccessible;
-    inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
-    misaligned = addr & PAGEOFFMASK;
-    if (inaccessible) return -3;
-    if (misaligned) return -4;
-
-    // Map newpage to user pagetable if enough pages committable for
-    // both the new mem page and any new pagetable page(s)
-    if (ncommitted >= NCOMMITTABLE) return -1;
-
-    // Calculate the lowest level pagetable page that has the PTE for `addr`
-    int level_present = NPTLEVELS;                  // Top level always present
-    x86_64_pagetable* ptp = current->pagetable;
-    while (level_present != 1) {
-        x86_64_pageentry_t pte = ptp->entry[lvlx_index(addr, level_present)];
-
-        // Next pagetable page is present (in a lower level)
-        if (pte & PTE_P) {
-            --level_present;
-            ptp = (x86_64_pagetable*) pte_next_down(pte);
-
-        // No lower pagetable page
-        } else {
-            break;
-        }
-    }
-
-    // Confirm enough committable for both mem pages and pagetable pages
-    int nptp_needed = level_present - 1;
-    if (ncommitted + nptp_needed > NCOMMITTABLE) return -2;
-
-    // Map newpage, commit a future cloned newpage, should never fail
-    vmiter(current->pagetable, addr).map(NEWPAGE_ADDR, PTE_PU_PRIV);
-    ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
-    ++ncommitted;
-
-    return 0;
-}
-
-
 // syscall_mmap(addr, length, prot, flags, fd, offset)
 //    Handles the `SYSCALL_MMAP` system call......
 //    If `addr == nullptr`, current implementation allocates a page at
@@ -652,9 +608,7 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     (void) length, (void) flags, (void) fd, (void) offset;
 
     // Check flags for `MAP_PRIVATE` xor `MAP_SHARED`
-    if ((bool) (flags & MAP_PRIVATE) == (bool) (flags & MAP_SHARED)) {
-        return -1234;           // Must be one or the other
-    }
+    if ((bool) (flags & MAP_PRIVATE) == (bool) (flags & MAP_SHARED)) return -23;
 
     // `addr == nullptr`, so must decide the virt addr to map onto
     if (!addr) {
@@ -681,7 +635,7 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     // both the new mem page and any new pagetable page(s)
     if (ncommitted >= NCOMMITTABLE) return -1;
 
-    // Calculate the lowest level pagetable page that has the PTE for `addr`
+    // Calculate the lowest level of pagetable page that has the PTE for `addr`
     int level_present = NPTLEVELS;                  // Top level always present
     x86_64_pagetable* ptp = current->pagetable;
     while (level_present != 1) {
@@ -690,7 +644,7 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
         // Next pagetable page is present (in a lower level)
         if (pte & PTE_P) {
             --level_present;
-            ptp = (x86_64_pagetable*) pte_next_down(pte);
+            ptp = reinterpret_cast<x86_64_pagetable*>(pte_next_down(pte));
 
         // No lower pagetable page
         } else {
@@ -699,8 +653,9 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     }
 
     // Confirm enough committable for both mem pages and pagetable pages
-    int nptp_needed = level_present - 1;
-    if (ncommitted + nptp_needed > NCOMMITTABLE) return -2;
+    // # of pages needed is `level_present - 1 + 1` for `level_present - 1`
+    // PTPs needed and `+ 1` mem page needed
+    if (ncommitted + level_present > NCOMMITTABLE) return -2;
 
     // Decide permissions, default to `MAP_PRIVATE` if needed
     // `PROT_EXEC` not yet implemented
