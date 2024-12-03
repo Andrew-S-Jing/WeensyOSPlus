@@ -557,11 +557,8 @@ uintptr_t syscall(regstate* regs) {
 
 int lvlx_index(uintptr_t addr, int x) {
     assert(x >= 1 && x <= NPTLEVELS);
-    unsigned lvlx_bits = x * PAGEINDEXBITS + PAGEOFFBITS;
-    uintptr_t lvlx_total_mask = (1UL << lvlx_bits) - 1;
-    uintptr_t lvlx_mask = lvlx_total_mask & ~PAGEOFFMASK;
-    uintptr_t unshifted_index = addr & lvlx_mask;
-    int index = unshifted_index >> x * PAGEINDEXBITS;
+    uintptr_t index_plus = addr >> ((x - 1) * PAGEINDEXBITS + PAGEOFFBITS);
+    int index = index_plus & PAGEINDEXMASK;
     assert(index >= 0 && !(index >> PAGEINDEXBITS));
     return index;
 }
@@ -574,12 +571,8 @@ int lvlx_index(uintptr_t addr, int x) {
 
 void* pte_next_down(x86_64_pageentry_t pte) {
     assert(pte & PTE_P);
-    unsigned total_bits = NPTLEVELS * PAGEINDEXBITS + PAGEOFFBITS;
-    assert(total_bits >= PAGEOFFBITS && total_bits <= 64);
-    uintptr_t total_mask = (1UL << total_bits) - 1;
-    uintptr_t no_flags_mask = total_mask & ~PAGEOFFMASK;
-    uintptr_t addr = pte & no_flags_mask;
-    assert(!(addr & PAGEOFFMASK) && addr <= total_mask);
+    uintptr_t addr = pte & PTE_PAMASK;
+    assert(!(addr & PAGEOFFMASK) && addr <= PTE_PAMASK);
     return pa2kptr(addr);
 }
 

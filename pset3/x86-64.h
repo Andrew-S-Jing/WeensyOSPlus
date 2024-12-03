@@ -16,6 +16,7 @@
 #define PAGEINDEXBITS   9                      // # bits in a page index level
 #define PAGESIZE        (1UL << PAGEOFFBITS)   // Size of page in bytes
 #define PAGEOFFMASK     (PAGESIZE - 1)
+#define PAGEINDEXMASK   ((1UL << PAGEINDEXBITS) - 1)
 #define NPTLEVELS       4                      // # levels in pagetable
 
 // Permission flags: define whether page is accessible
