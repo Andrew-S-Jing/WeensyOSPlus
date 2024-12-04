@@ -116,8 +116,9 @@ void kernel_start(const char* command) {
             perm &= ~PTE_U;
         }
 
-        // most memory should not be executable
-        if (addr < KERNEL_START_ADDR || addr >= KERNEL_STACK_TOP) {
+        // non-kernel memory should not be executable
+        if (reserved_physical_address(addr)
+                || allocatable_physical_address(addr)) {
             perm |= PTE_XD;
         }
         // install identity mapping
