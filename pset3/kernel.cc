@@ -610,22 +610,46 @@ void* pte_next_down(x86_64_pageentry_t pte) {
 
 
 // syscall_mmap(addr, length, prot, flags, fd, offset)
-//    Handles the `SYSCALL_MMAP` system call......
-//    If `addr == nullptr`, current implementation allocates a page at
-//    the top of the user heap.
-//    `prot` can be `PROT_NONE`, `PROT_READ`, or `PROT_WRITE`.
-//    `PROT_WRITE` implies read/write permissions. `PROT_EXEC` not implemented.
-//    If files are implemented, `prot` must be checked against
-//    the underlying file permissions.
-//    Must have one or the other of `MAP_PRIVATE` and `MAP_SHARED`.
-//    `MAP_PRIVATE` marks pages (if `PROT_WRITE`) for copy-on-write.
-//    `MAP_SHARED` shares pages (if `PROT_WRITE`) to not be process-isolated.
-//    **CURRENTLY ONLY USES `addr`, REST OF ARGS TO BE IMPLEMENTED**
+//    Handles the `SYSCALL_MMAP` and `SYSCALL_PAGE_ALLOC` system calls.
+//
+//    Arguments:
+//      `addr`:     The memory mapping will be from exactly `addr`, as if
+//                  `MAP_FIXED` were set in the Linux implementation.
+//                  Must be page aligned. If `nullptr`, the mapping will be
+//                  from the lowest, available and large enough contiguous
+//                  chunk of user virt mem space (usually top-of-heap).
+//      `length`:   Request `length` bytes of contiguous virt mem.
+//                  Must be a multiple of `PAGESIZE` (i.e. request
+//                  `length / PAGESIZE` pages). Requests of `length == 0`
+//                  may or may not fail, depending on permissions.
+//      `prot`:     `prot` is a bitwise or of `PROT_NONE`, `PROT_READ`,
+//                  `PROT_WRITE`, and `PROT_EXEC`, which determine if the
+//                  mapped memory has read, write, and/or execute permissions.
+//                  `PROT_READ` is implied by `PROT_WRITE` and `PROT_EXEC`.
+//      `flags`:    `flags` is exactly one of `MAP_PRIVATE` and `MAP_SHARED`,
+//                  onto which `MAP_ANON` must be or'd, since files are
+//                  not yet implemented. `MAP_PRIVATE` isolates the mapped
+//                  memory from other processes, whereas `MAP_SHARED` does not
+//                  preclude other processes from having write permissions.
+//                  `MAP_ANON` means the mapped memory is initialized to zero.
+//      `fd`:       Must be `-1`. Files are not yet implemented.
+//      `offset`:   Must be `0`. Files are not yet implemented.
+//
+//    Returns:
+//      Success:    Returns the virt addr to which the requested memory
+//                  is mapped. This is either `addr`, if `addr`, or
+//                  some virt addr that the kernel decides if `!addr`.
+//                  The return will be `nullptr` if `prot == PROT_NONE`.
+//      Failure:    Returns `MAP_FAILED`, which is `((void*) -1)`. In the
+//                  future, there may be an error code implemented to provide
+//                  processes details about the failure.
+//
+//    **FILES TO BE IMPLEMENTED**
 
 void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                    int fd, off_t offset) {
 
-    assert(fd == -1);           // File mapping not implemented
+    if (fd != -1) return MAP_FAILED;           // File mapping not implemented
 
     (void) flags, (void) fd, (void) offset;
 
@@ -661,7 +685,7 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                 break;
             }
         }
-        if (!addr) return MAP_FAILED;        // Not enough virt mem?!?!
+        if (!addr) return MAP_FAILED;        // Not enough virt mem
     }
 
     // Fail on misaligned or kernel memspace virt addr
@@ -746,7 +770,7 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     
     // Files not implemented (must be `MAP_ANON`)
     } else {
-        assert(false);
+        return MAP_FAILED;
     }
 
     return pa2kptr(addr);
