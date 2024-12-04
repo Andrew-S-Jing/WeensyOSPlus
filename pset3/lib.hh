@@ -243,10 +243,12 @@ inline uint32_t crc32c(const void* buf, size_t sz) {
 #define PROT_NONE	0x0		/* Page can not be accessed.  */
 
 // Mappings
-#define MAP_SHARED	0x01		/* Share changes.  */
-#define MAP_PRIVATE	0x02		/* Changes are private.  */
-#define MAP_ANONYMOUS	0x20	/* Don't use a file.  */
-#define MAP_ANON	MAP_ANONYMOUS
+#define MAP_SHARED	    0x01		    /* Share changes.  */
+#define MAP_PRIVATE	    0x02		    /* Changes are private.  */
+#define MAP_ANONYMOUS	0x20	        /* Don't use a file.  */
+#define MAP_ANON	    MAP_ANONYMOUS
+/* Return value of `sys_mmap` in case of an error.  */
+#define MAP_FAILED	    (reinterpret_cast<void*>(-1))
 
 
 inline bool is_error(uintptr_t r) {

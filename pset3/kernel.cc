@@ -481,9 +481,8 @@ void exception(regstate* regs) {
 
 
 // These functions are defined farther below
-int syscall_mmap(uintptr_t addr);
-int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
-                 int fd, off_t offset);
+void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
+                   int fd, off_t offset);
 pid_t syscall_fork();
 
 
@@ -535,20 +534,26 @@ uintptr_t syscall(regstate* regs) {
         schedule();             // does not return
 
     case SYSCALL_MMAP:
-        return syscall_mmap(current->regs.reg_rdi,
-                            current->regs.reg_rsi,
-                            current->regs.reg_rdx,
-                            current->regs.reg_r8,
-                            current->regs.reg_r9,
-                            current->regs.reg_r10);
+        return kptr2pa(syscall_mmap(current->regs.reg_rdi,
+                                    current->regs.reg_rsi,
+                                    current->regs.reg_rdx,
+                                    current->regs.reg_r8,
+                                    current->regs.reg_r9,
+                                    current->regs.reg_r10));
 
     case SYSCALL_PAGE_ALLOC:
-        return syscall_mmap(current->regs.reg_rdi,
-                            PAGESIZE,
-                            PROT_READ | PROT_WRITE | PROT_EXEC,
-                            MAP_PRIVATE | MAP_ANON,
-                            -1,
-                            0);
+        // `sys_page_alloc` does not specify `addr == nullptr` behavior
+        if (!current->regs.reg_rdi
+                || syscall_mmap(current->regs.reg_rdi,
+                                PAGESIZE,
+                                PROT_READ | PROT_WRITE | PROT_EXEC,
+                                MAP_PRIVATE | MAP_ANON,
+                                -1,
+                                0)
+                   == MAP_FAILED) {
+            return -1;
+        }
+        return 0;
 
     case SYSCALL_FORK:
         return syscall_fork();
@@ -616,15 +621,17 @@ void* pte_next_down(x86_64_pageentry_t pte) {
 //    `MAP_SHARED` shares pages (if `PROT_WRITE`) to not be process-isolated.
 //    **CURRENTLY ONLY USES `addr`, REST OF ARGS TO BE IMPLEMENTED**
 
-int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
-                 int fd, off_t offset) {
+void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
+                   int fd, off_t offset) {
 
     assert(fd == -1);           // File mapping not implemented
 
     (void) length, (void) flags, (void) fd, (void) offset;
 
     // Check flags for `MAP_PRIVATE` xor `MAP_SHARED`
-    if ((bool) (flags & MAP_PRIVATE) == (bool) (flags & MAP_SHARED)) return -23;
+    if ((bool) (flags & MAP_PRIVATE) == (bool) (flags & MAP_SHARED)) {
+        return MAP_FAILED;
+    }
 
     // `addr == nullptr`, so must decide the virt addr to map onto
     if (!addr) {
@@ -637,19 +644,19 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                 break;
             }
         }
-        if (!addr) return -42069;        // Not enough virt mem?!?!
+        if (!addr) return MAP_FAILED;        // Not enough virt mem?!?!
     }
 
     // Fail on misaligned or kernel memspace virt addr
     bool misaligned, inaccessible;
     inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
     misaligned = addr & PAGEOFFMASK;
-    if (inaccessible) return -3;
-    if (misaligned) return -4;
+    if (inaccessible) return MAP_FAILED;
+    if (misaligned) return MAP_FAILED;
 
     // Map newpage to user pagetable if enough pages committable for
     // both the new mem page and any new pagetable page(s)
-    if (ncommitted >= NCOMMITTABLE) return -1;
+    if (ncommitted >= NCOMMITTABLE) return MAP_FAILED;
 
     // Calculate the lowest level of pagetable page that has the PTE for `addr`
     // ** CURRENTLY DOES NOT ANTICIPATE PS-FLAGGED PTES **
@@ -672,12 +679,12 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     // Confirm enough committable for both mem pages and pagetable pages
     // # of pages needed is `level_present - 1 + 1` for `level_present - 1`
     // PTPs needed and `+ 1` mem page needed
-    if (ncommitted + level_present > NCOMMITTABLE) return -2;
+    if (ncommitted + level_present > NCOMMITTABLE) return MAP_FAILED;
 
     // Decide permissions, default to `MAP_PRIVATE` if needed
     // `PROT_EXEC` not yet implemented
     uint64_t perm;
-    if (prot == PROT_NONE) return 0;        // No new mapping (success)
+    if (prot == PROT_NONE) return nullptr;        // No new mapping
     else {
         perm = PTE_PU;
         if (prot & PROT_WRITE) perm |= flags & MAP_PRIVATE ? PTE_PRIV : PTE_W;
@@ -686,32 +693,31 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
 
     // Map an anonymous page, should never fail
     if (flags & MAP_ANON) {
+        void* map_kptr = nullptr;
         bool use_newpage = !(flags & MAP_SHARED) || !(prot & PROT_WRITE);
-        uintptr_t pa = 0;
 
         // Set up private page (newpage), commit copy-on-write page if needed
         if (use_newpage) {
-            pa = NEWPAGE_ADDR;
+            map_kptr = pa2kptr(NEWPAGE_ADDR);
             ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
             if (prot & PROT_WRITE) ++ncommitted;
 
         // Set up writable page (newly allocated and zeroed page)
         } else {
-            void* kptr = kalloc(PAGESIZE);
-            memset(kptr, 0, PAGESIZE);
-            pa = kptr2pa(kptr);
+            map_kptr = kalloc(PAGESIZE);
+            memset(map_kptr, 0, PAGESIZE);
         }
 
         // Map
-        assert(pa);
-        vmiter(current->pagetable, addr).map(pa, perm);
+        assert(map_kptr);
+        vmiter(current->pagetable, addr).map(map_kptr, perm);
     
     // Files not implemented (must be `MAP_ANON`)
     } else {
         assert(false);
     }
 
-    return 0;
+    return pa2kptr(addr);
 }
 
 

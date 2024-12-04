@@ -136,10 +136,15 @@ inline int sys_page_alloc(void* addr) {
 }
 
 // sys_mmap(addr, length, prot, flags, fd, offset)
-inline int sys_mmap(void* addr, size_t length, int prot, int flags,
-                    int fd, off_t offset) {
-    return make_syscall(SYSCALL_MMAP,
-                        (uintptr_t) addr, length, prot, flags, fd, offset);
+inline void* sys_mmap(void* addr, size_t length, int prot, int flags,
+                      int fd, off_t offset) {
+    return reinterpret_cast<void*>(make_syscall(SYSCALL_MMAP,
+                                                (uintptr_t) addr,
+                                                length,
+                                                prot,
+                                                flags,
+                                                fd,
+                                                offset));
 }
 
 // sys_fork()

@@ -78,8 +78,7 @@ void process_main() {
                             PROT_READ | PROT_WRITE | PROT_EXEC,
                             MAP_ANON | MAP_SHARED,
                             -1,
-                            0)
-                   >= 0) {
+                            0) != MAP_FAILED) {
             // check that the page starts out all zero
             for (unsigned long* l = (unsigned long*) heap_top;
                  l != (unsigned long*) (heap_top + PAGESIZE);
