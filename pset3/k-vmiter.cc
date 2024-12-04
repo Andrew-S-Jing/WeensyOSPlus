@@ -49,7 +49,7 @@ void vmiter::next() {
     real_find((va_ | lbits_mask(lbits)) + 1, true);
 }
 
-int vmiter::try_map(uintptr_t pa, int perm) {
+int vmiter::try_map(uintptr_t pa, uint64_t perm) {
     if (pa == (uintptr_t) -1 && perm == 0) {
         pa = 0;
     }

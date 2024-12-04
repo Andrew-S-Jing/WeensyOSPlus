@@ -249,6 +249,8 @@ struct program_image_segment {
 
     // Return true iff the segment is writable.
     bool writable() const;
+    // Return true iff the segment is executable.
+    bool executable() const;
 
     // Compare segment iterators.
     bool operator==(const program_image_segment& x) const;

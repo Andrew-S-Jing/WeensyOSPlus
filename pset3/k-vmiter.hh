@@ -49,6 +49,8 @@ class vmiter {
     // Return true iff `this->va()` is present and unprivileged (`PTE_P|PTE_U`),
     // implying that `this->va()` is readable
     inline bool user() const;
+    // Return true iff `this->va()` is executable (not `PTE_XD`)
+    inline bool executable() const;
 
     // ADVANCED PERMISSIONS
     // Return true iff `(this->perm() & desired_perm) == desired_perm`
@@ -86,10 +88,10 @@ class vmiter {
     // current virtual address) to `pa` with permissions `perm`.
     // `this->va()` must be page-aligned. Might call `kalloc` to allocate
     // page table pages. Panics if `kalloc` fails (returns `nullptr`).
-    inline void map(uintptr_t pa, int perm);
+    inline void map(uintptr_t pa, uint64_t perm);
     // Same, but map a kernel pointer
-    inline void map(void* kptr, int perm);
-    inline void map(volatile void* kptr, int perm);
+    inline void map(void* kptr, uint64_t perm);
+    inline void map(volatile void* kptr, uint64_t perm);
 
     // Change the mapping in `this->pagetable()` for `this->va()` (the
     // current virtual address) to `pa` with permissions `perm`.
@@ -97,9 +99,9 @@ class vmiter {
     // page table pages. On success, changes the mapping and returns 0.
     // If `kalloc` fails, returns a negative error code without modifying
     // any mappings.
-    [[gnu::warn_unused_result]] int try_map(uintptr_t pa, int perm);
-    [[gnu::warn_unused_result]] inline int try_map(void* kptr, int perm);
-    [[gnu::warn_unused_result]] inline int try_map(volatile void* kptr, int perm);
+    [[gnu::warn_unused_result]] int try_map(uintptr_t pa, uint64_t perm);
+    [[gnu::warn_unused_result]] inline int try_map(void* kptr, uint64_t perm);
+    [[gnu::warn_unused_result]] inline int try_map(volatile void* kptr, uint64_t perm);
 
   private:
     static constexpr int initial_lbits = PAGEOFFBITS + 3 * PAGEINDEXBITS;
@@ -109,7 +111,7 @@ class vmiter {
     x86_64_pagetable* pt_;
     x86_64_pageentry_t* pep_;
     int lbits_;
-    int perm_;
+    uint64_t perm_;
     uintptr_t va_;
 
     static constexpr int initial_perm = 0xFFF;
@@ -237,6 +239,9 @@ inline bool vmiter::priv() const {
 inline bool vmiter::user() const {
     return perm(PTE_P | PTE_U);
 }
+inline bool vmiter::executable() const {
+    return !perm(PTE_XD);
+}
 inline bool vmiter::range_perm(size_t sz, uint64_t desired_perm) const {
     return (range_perm(sz) & desired_perm) == desired_perm;
 }
@@ -273,23 +278,23 @@ inline vmiter vmiter::operator-(intptr_t delta) const {
 inline void vmiter::next_range() {
     real_find(last_va(), true);
 }
-inline void vmiter::map(uintptr_t pa, int perm) {
+inline void vmiter::map(uintptr_t pa, uint64_t perm) {
     int r = try_map(pa, perm);
     assert(r == 0, "vmiter::map failed");
 }
-inline void vmiter::map(void* kp, int perm) {
+inline void vmiter::map(void* kp, uint64_t perm) {
     assert(kp != nullptr);
     map(reinterpret_cast<uintptr_t>(kp), perm);
 }
-inline void vmiter::map(volatile void* kp, int perm) {
+inline void vmiter::map(volatile void* kp, uint64_t perm) {
     assert(kp != nullptr);
     map(reinterpret_cast<uintptr_t>(kp), perm);
 }
-inline int vmiter::try_map(void* kp, int perm) {
+inline int vmiter::try_map(void* kp, uint64_t perm) {
     assert(kp != nullptr);
     return try_map(reinterpret_cast<uintptr_t>(kp), perm);
 }
-inline int vmiter::try_map(volatile void* kp, int perm) {
+inline int vmiter::try_map(volatile void* kp, uint64_t perm) {
     assert(kp != nullptr);
     return try_map(reinterpret_cast<uintptr_t>(kp), perm);
 }

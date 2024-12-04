@@ -91,6 +91,8 @@ typedef struct __attribute__((aligned(PAGESIZE))) x86_64_pagetable {
                                     //   missing page)
 #define PFERR_WRITE     PTE_W       // Fault happened on a write
 #define PFERR_USER      PTE_U       // Fault happened in user context
+#define PFERR_PWU       (PFERR_PRESENT | PFERR_WRITE | PFERR_USER)
+#define PFERR_EXEC      0x10UL      // Fault happened on an execution
 
 
 // Interrupt numbers

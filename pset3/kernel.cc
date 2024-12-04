@@ -105,13 +105,20 @@ void kernel_start(const char* command) {
 
     // (re-)initialize kernel page table (kernel pages are shared)
     for (uintptr_t addr = 0; addr < MEMSIZE_PHYSICAL; addr += PAGESIZE) {
-        int perm = PTE_PWU;
+        uint64_t perm = PTE_PWU;
+
+        // nullptr is inaccessible even to the kernel
         if (addr == 0) {
-            // nullptr is inaccessible even to the kernel
             perm = 0;
+
+        // kernel memory (except CGA console) is inaccessible to user
         } else if (addr < PROC_START_ADDR && addr != CONSOLE_ADDR) {
-            // kernel memory (except CGA console) is inaccessible to user
             perm &= ~PTE_U;
+        }
+
+        // most memory should not be executable
+        if (addr < KERNEL_START_ADDR || addr >= KERNEL_STACK_TOP) {
+            perm |= PTE_XD;
         }
         // install identity mapping
         int r = vmiter(kernel_pagetable, addr).try_map(addr, perm);
@@ -262,7 +269,7 @@ void kcleanup(pid_t pid) {
 //      Errors:  returns `-1` on failed mem page allocation
 //               returns `-2` on failed pagetable page allocation
 
-int kpage_alloc(pid_t pid, uintptr_t va, int perm) {
+int kpage_alloc(pid_t pid, uintptr_t va, uint64_t perm) {
     // Allocate page
     void* kptr = kalloc(PAGESIZE);
     if (!kptr) return -1;
@@ -315,8 +322,11 @@ void process_setup(pid_t pid, const char* program_name) {
                  a < seg.va() + seg.size();
                  a += PAGESIZE) {
             
-            // Allocate and map (writable segments are private)
-            int perm = seg.writable() ? PTE_PWU_PRIV : PTE_PU;
+            // Allocate and map
+            // Writable segments are private
+            uint64_t perm = seg.writable() ? PTE_PWU_PRIV : PTE_PU;
+            // Allow executable to execute
+            if (seg.executable()) perm &= ~PTE_XD;
             int r = kpage_alloc(pid, a, perm);
             assert (r == 0);
 
@@ -351,7 +361,7 @@ void process_setup(pid_t pid, const char* program_name) {
     uintptr_t stack_addr = (va_last) - (va_last & PAGEOFFMASK);
     ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
     // allocate and map stack segment (stack is private)
-    int r = kpage_alloc(pid, stack_addr, PTE_PWU_PRIV);
+    int r = kpage_alloc(pid, stack_addr, PTE_PWU_PRIV | PTE_XD);
     assert(r == 0);
 
     // mark process as runnable
@@ -404,7 +414,8 @@ void exception(regstate* regs) {
         uintptr_t addr = rdcr2();
 
         // Write permission faults
-        if (multflag(regs->reg_errcode, PTE_PWU)) {
+        if (!(regs->reg_errcode & PFERR_EXEC)
+                && multflag(regs->reg_errcode, PFERR_PWU)) {
             uintptr_t va = addr - (addr & PAGEOFFMASK);
             vmiter pte(current->pagetable, va);
             assert(pte.pa());
@@ -413,11 +424,14 @@ void exception(regstate* regs) {
             if (pte.priv()) {
                 assert(pte.writable() != pte.priv());
 
+                uint64_t perm = PTE_PWU_PRIV;
+                if (!pte.executable()) perm |= PTE_XD;
+
                 // Do not free the ref page completely (`kalloc` will wipe mem),
                 // but also never assign write access to the newpage
                 if (pte.pa() != NEWPAGE_ADDR
                         && physpages[pte.pa() / PAGESIZE].refcount == 1) {
-                    pte.map(pte.kptr(), PTE_PWU_PRIV);
+                    pte.map(pte.kptr(), perm);
                     break;
                 }
 
@@ -427,19 +441,21 @@ void exception(regstate* regs) {
                 kfree(kptr, true);
                 void* cowpage = kalloc(PAGESIZE);
                 assert(cowpage);
-                pte.map(cowpage, PTE_PWU_PRIV);
+                pte.map(cowpage, perm);
                 memcpy(cowpage, kptr, PAGESIZE);
                 break;
             }
         }
 
 
-        const char* operation = regs->reg_errcode & PTE_W
-                ? "write" : "read";
-        const char* problem = regs->reg_errcode & PTE_P
+        const char* operation;
+        if (regs->reg_errcode & PFERR_EXEC) operation = "execute";
+        else if (regs->reg_errcode & PFERR_WRITE) operation = "write";
+        else operation = "read";
+        const char* problem = regs->reg_errcode & PFERR_PRESENT
                 ? "protection problem" : "missing page";
 
-        if (!(regs->reg_errcode & PTE_U)) {
+        if (!(regs->reg_errcode & PFERR_USER)) {
             proc_panic(current, "Kernel page fault on %p (%s %s, rip=%p)!\n",
                        addr, operation, problem, regs->reg_rip);
         }
@@ -561,13 +577,13 @@ uintptr_t syscall(regstate* regs) {
 }
 
 
-// lvlx_index(addr, x)
-//    Returns the the level `x` index of physical address `addr`.
+// ptp_lvl_index(addr, lvl)
+//    Returns the the level `lvl` index of physical address `addr`.
 //    Per WeensyOS's design, there are only levels `1` through `4`.
 
-int lvlx_index(uintptr_t addr, int x) {
-    assert(x >= 1 && x <= NPTLEVELS);
-    uintptr_t index_plus = addr >> ((x - 1) * PAGEINDEXBITS + PAGEOFFBITS);
+int ptp_lvl_index(uintptr_t addr, int lvl) {
+    assert(lvl >= 1 && lvl <= NPTLEVELS);
+    uintptr_t index_plus = addr >> ((lvl - 1) * PAGEINDEXBITS + PAGEOFFBITS);
     int index = index_plus & PAGEINDEXMASK;
     assert(index >= 0 && !(index >> PAGEINDEXBITS));
     return index;
@@ -636,10 +652,11 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     if (ncommitted >= NCOMMITTABLE) return -1;
 
     // Calculate the lowest level of pagetable page that has the PTE for `addr`
+    // ** CURRENTLY DOES NOT ANTICIPATE PS-FLAGGED PTES **
     int level_present = NPTLEVELS;                  // Top level always present
     x86_64_pagetable* ptp = current->pagetable;
     while (level_present != 1) {
-        x86_64_pageentry_t pte = ptp->entry[lvlx_index(addr, level_present)];
+        x86_64_pageentry_t pte = ptp->entry[ptp_lvl_index(addr, level_present)];
 
         // Next pagetable page is present (in a lower level)
         if (pte & PTE_P) {
@@ -659,11 +676,12 @@ int syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
 
     // Decide permissions, default to `MAP_PRIVATE` if needed
     // `PROT_EXEC` not yet implemented
-    int perm;
+    uint64_t perm;
     if (prot == PROT_NONE) return 0;        // No new mapping (success)
     else {
         perm = PTE_PU;
         if (prot & PROT_WRITE) perm |= flags & MAP_PRIVATE ? PTE_PRIV : PTE_W;
+        if (!(prot & PROT_EXEC)) perm |= PTE_XD;
     }
 
     // Map an anonymous page, should never fail
@@ -752,8 +770,11 @@ pid_t syscall_fork() {
                 return -1;
             }
 
+            uint64_t perm = PTE_PU_PRIV;
+            if (!pte.executable()) perm |= PTE_XD;
+
             // Map copy-on-write mem to child, commit a future cloned page
-            if (pte.try_map(it.pa(), PTE_PU_PRIV) != 0) {
+            if (pte.try_map(it.pa(), perm) != 0) {
                 kcleanup(pid);
                 return -2;
             }
@@ -767,7 +788,7 @@ pid_t syscall_fork() {
             }
 
             // Parent permissions must also be copy-on-write
-            if (it.writable()) it.map(it.pa(), PTE_PU_PRIV);
+            if (it.writable()) it.map(it.pa(), perm);
         }
     }
 

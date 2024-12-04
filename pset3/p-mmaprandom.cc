@@ -53,7 +53,7 @@ void process_main() {
         // Random locals, decide what type of mmap to request
         x = rand(0, 7 + min(nalloc / 4, 10U));
         void* addr = rand(0,1) ? (void*) heap_top : nullptr;
-        int prot = rand(1,2), flags = rand(1,2);
+        int prot = rand(0,4), flags = rand(1,2);
 
         // Fork, map, or die
         if (x < 2) {

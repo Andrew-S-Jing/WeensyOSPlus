@@ -1144,6 +1144,9 @@ size_t program_image_segment::data_size() const {
 bool program_image_segment::writable() const {
     return ph_->p_flags & ELF_PFLAG_WRITE;
 }
+bool program_image_segment::executable() const {
+    return ph_->p_flags & ELF_PFLAG_EXEC;
+}
 bool program_image_segment::operator==(const program_image_segment& x) const {
     return ph_ == x.ph_;
 }
