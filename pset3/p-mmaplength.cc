@@ -2,7 +2,7 @@
 #ifndef ALLOC_SLOWDOWN
 #define ALLOC_SLOWDOWN 18
 #endif
-#define ALLOC_PAGES 2
+#define ALLOC_PAGES 10
 
 extern uint8_t end[];
 

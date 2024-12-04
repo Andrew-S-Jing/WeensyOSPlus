@@ -702,6 +702,7 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     // Calculate number of committed pages needed to map `addr` in current table
     // ** CURRENTLY DOES NOT ANTICIPATE PS-FLAGGED PTES **
     // ** CURRENTLY OVERCOUNTS # of L2 and L3 PAGES NEEDED **
+    //      ** NOT INCORRECT, JUST USES MEM INEFFICIENTLY ON LARGE MMAPs **
     x86_64_pagetable* pt = current->pagetable;
     ssize_t npagesneeded = 0;
     for (uintptr_t cursor = addr; cursor < addr + length; cursor += PAGESIZE) {
