@@ -626,8 +626,11 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
 
     assert(fd == -1);           // File mapping not implemented
 
-    (void) length, (void) flags, (void) fd, (void) offset;
+    (void) flags, (void) fd, (void) offset;
 
+    // Entry errors
+    // Mapping only implemented for whole pages
+    if (length & PAGEOFFMASK) return MAP_FAILED;
     // Check flags for `MAP_PRIVATE` xor `MAP_SHARED`
     if ((bool) (flags & MAP_PRIVATE) == (bool) (flags & MAP_SHARED)) {
         return MAP_FAILED;
@@ -636,11 +639,24 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     // `addr == nullptr`, so must decide the virt addr to map onto
     if (!addr) {
         // Find a free range of virt addrs that can fit `PAGESIZE` bytes
+        uintptr_t free_start = 0;
+        size_t free_length = 0;
         for (uintptr_t cursor = PROC_START_ADDR;
                  cursor < MEMSIZE_VIRTUAL;
                  cursor += PAGESIZE) {
-            if (!vmiter(current->pagetable, cursor).present()) {
-                addr = cursor;
+
+            // Increment
+            if (vmiter(current->pagetable, cursor).present()) {
+                free_start = free_length = 0;
+            } else {
+                if (free_start == 0) free_start = cursor;
+                free_length += PAGESIZE;
+            }
+
+            // Test for large enough virt addr chunk
+            if (length <= free_length) {
+                assert(free_start);
+                addr = free_start;
                 break;
             }
         }
@@ -658,28 +674,38 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     // both the new mem page and any new pagetable page(s)
     if (ncommitted >= NCOMMITTABLE) return MAP_FAILED;
 
-    // Calculate the lowest level of pagetable page that has the PTE for `addr`
+    // Calculate number of committed pages needed to map `addr` in current table
     // ** CURRENTLY DOES NOT ANTICIPATE PS-FLAGGED PTES **
-    int level_present = NPTLEVELS;                  // Top level always present
-    x86_64_pagetable* ptp = current->pagetable;
-    while (level_present != 1) {
-        x86_64_pageentry_t pte = ptp->entry[ptp_lvl_index(addr, level_present)];
+    // ** CURRENTLY OVERCOUNTS # of L2 and L3 PAGES NEEDED **
+    x86_64_pagetable* pt = current->pagetable;
+    ssize_t npagesneeded = 0;
+    for (uintptr_t cursor = addr; cursor < addr + length; cursor += PAGESIZE) {
 
-        // Next pagetable page is present (in a lower level)
-        if (pte & PTE_P) {
-            --level_present;
-            ptp = reinterpret_cast<x86_64_pagetable*>(pte_next_down(pte));
+        // Calculate lowest level of PTP that has the PTE for `cursor`
+        x86_64_pagetable* ptp = pt;
+        int level_present = NPTLEVELS;     // Top level always present
+        while (level_present != 1) {
+            x86_64_pageentry_t pte =
+                ptp->entry[ptp_lvl_index(cursor, level_present)];
 
-        // No lower pagetable page
-        } else {
-            break;
+            // Next pagetable page is present (in a lower level)
+            if (pte & PTE_P) {
+                --level_present;
+                ptp = reinterpret_cast<x86_64_pagetable*>(pte_next_down(pte));
+
+            // No lower pagetable page
+            } else {
+                break;
+            }
         }
+
+        // # of pages needed is `level_present - 1 + 1` for `level_present - 1`
+        // PTPs needed and `+ 1` mem page needed if writable
+        npagesneeded += level_present - 1 + (prot & PROT_WRITE ? 1 : 0);
     }
 
     // Confirm enough committable for both mem pages and pagetable pages
-    // # of pages needed is `level_present - 1 + 1` for `level_present - 1`
-    // PTPs needed and `+ 1` mem page needed
-    if (ncommitted + level_present > NCOMMITTABLE) return MAP_FAILED;
+    if (ncommitted + npagesneeded > NCOMMITTABLE) return MAP_FAILED;
 
     // Decide permissions, default to `MAP_PRIVATE` if needed
     // `PROT_EXEC` not yet implemented
@@ -691,26 +717,31 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
         if (!(prot & PROT_EXEC)) perm |= PTE_XD;
     }
 
-    // Map an anonymous page, should never fail
+    // Map anonymous pages, should never fail
     if (flags & MAP_ANON) {
-        void* map_kptr = nullptr;
         bool use_newpage = !(flags & MAP_SHARED) || !(prot & PROT_WRITE);
 
-        // Set up private page (newpage), commit copy-on-write page if needed
-        if (use_newpage) {
-            map_kptr = pa2kptr(NEWPAGE_ADDR);
-            ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
-            if (prot & PROT_WRITE) ++ncommitted;
+        for (uintptr_t cursor = addr;
+                 cursor < addr + length;
+                 cursor += PAGESIZE) {
+            void* map_kptr = nullptr;
 
-        // Set up writable page (newly allocated and zeroed page)
-        } else {
-            map_kptr = kalloc(PAGESIZE);
-            memset(map_kptr, 0, PAGESIZE);
+            // Set up private page (newpage), commit COW page if needed
+            if (use_newpage) {
+                map_kptr = pa2kptr(NEWPAGE_ADDR);
+                ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
+                if (prot & PROT_WRITE) ++ncommitted;
+
+            // Set up writable page (newly allocated and zeroed page)
+            } else {
+                map_kptr = kalloc(PAGESIZE);
+                memset(map_kptr, 0, PAGESIZE);
+            }
+
+            // Map
+            assert(map_kptr);
+            vmiter(current->pagetable, cursor).map(map_kptr, perm);
         }
-
-        // Map
-        assert(map_kptr);
-        vmiter(current->pagetable, addr).map(map_kptr, perm);
     
     // Files not implemented (must be `MAP_ANON`)
     } else {
