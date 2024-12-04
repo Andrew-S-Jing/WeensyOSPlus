@@ -112,7 +112,11 @@ void memusage::refresh() {
                 if (it.user()) {
                     unsigned flags = f_user | pidflag;
                     if (it.va() != it.pa()) flags |= f_nonidentity;
-                    if (it.priv() && !it.writable()) flags |= f_copyonwrite;
+                    if (it.priv()
+                            && !it.writable()
+                            && physpages[it.pa() / PAGESIZE].refcount > 1) {
+                        flags |= f_copyonwrite;
+                    }
                     mark(it.pa(), flags);
                     it.next();
                 } else {
