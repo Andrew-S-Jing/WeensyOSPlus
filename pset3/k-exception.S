@@ -91,7 +91,7 @@ _Z15exception_entryv:
         pushq %rax
         movq %rsp, %rdi
 
-        // load kernel page table
+        // load kernel pagetable
         movq $kernel_pagetable, %rax
         movq %rax, %cr3
 
@@ -106,7 +106,7 @@ _Z16exception_returnP4proc:
         cmpl $P_RUNNABLE, %eax
         jne proc_runnable_fail
 
-        // load process page table
+        // load process pagetable
         movq (%rdi), %rax
         movq %rax, %cr3
 
@@ -171,7 +171,7 @@ _Z13syscall_entryv:
         subq $8, %rsp                  // %rcx clobbered by `syscall`
         pushq %rax
 
-        // load kernel page table
+        // load kernel pagetable
         movq $kernel_pagetable, %rax
         movq %rax, %cr3
 
@@ -185,7 +185,7 @@ _Z13syscall_entryv:
         cmpl $P_RUNNABLE, %ecx
         jne proc_runnable_fail
 
-        // load process page table
+        // load process pagetable
         movq current, %rcx
         movq (%rcx), %rcx
         movq %rcx, %cr3

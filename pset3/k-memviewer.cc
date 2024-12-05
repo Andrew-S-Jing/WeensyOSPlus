@@ -3,7 +3,7 @@
 
 // k-memviewer.cc
 //
-//    The `memusage` class tracks memory usage by walking page tables,
+//    The `memusage` class tracks memory usage by walking pagetables,
 //    looks for errors, and prints the memory map to the console.
 
 
@@ -33,7 +33,7 @@ class memusage {
             return 0;
         }
     }
-    // Pages such as process page tables and `struct proc` are counted
+    // Pages such as process pagetables and `struct proc` are counted
     // both as kernel-only and process-associated.
 
 
@@ -69,7 +69,7 @@ class memusage {
     static int marked_pid(unsigned v) {
         return lsb(v >> 4);
     }
-    // print an error about a page table
+    // print an error about a pagetable
     void page_error(uintptr_t pa, const char* desc, int pid) const;
 };
 
@@ -86,14 +86,14 @@ void memusage::refresh() {
 
     memset(v_, 0, (maxpa / PAGESIZE) * sizeof(*v_));
 
-    // mark kernel page tables
+    // mark kernel pagetables
     for (ptiter it(kernel_pagetable); !it.done(); it.next()) {
         mark(it.pa(), f_kernel);
     }
     mark(kptr2pa(kernel_pagetable), f_kernel);
     mark(kptr2pa(v_), f_kernel);
 
-    // mark pages accessible from each process's page table
+    // mark pages accessible from each process's pagetable
     separate_tables_ = false;
     for (int pid = 1; pid < PID_MAX; ++pid) {
         unsigned pidflag = f_process(pid);
@@ -126,7 +126,7 @@ void memusage::refresh() {
         }
     }
 
-    // if no different process page tables, use physical address instead
+    // if no different process pagetables, use physical address instead
     if (!separate_tables_) {
         for (vmiter it(kernel_pagetable, 0); it.va() < VA_LOWEND; ) {
             if (it.user()
@@ -147,8 +147,8 @@ void memusage::page_error(uintptr_t pa, const char* desc, int pid) const {
         console[error_sympos_] = '*' | 0xF400;
     }
     const char* fmt = pid >= 0
-        ? "PAGE TABLE ERROR: %lx: %s (pid %d)\n"
-        : "PAGE TABLE ERROR: %lx: %s\n";
+        ? "pagetable ERROR: %lx: %s (pid %d)\n"
+        : "pagetable ERROR: %lx: %s\n";
     error_printf(CPOS(22, 0), COLOR_ERROR, fmt, pa, desc, pid);
     if (nerrors_ < 0xFFFFFFFF) {
         ++nerrors_;
@@ -162,6 +162,7 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
     bool is_reserved = reserved_physical_address(pa);
     bool is_kernel = !is_reserved && !allocatable_physical_address(pa);
     bool is_newpage = pa == NEWPAGE_ADDR;
+    bool is_filetable = pa == FILETABLE_ADDR;
 
     unsigned pn = pa / PAGESIZE;
     if (pn < NPAGES && !physpages[pn].valid()) {
@@ -172,6 +173,8 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
     if (pa >= maxpa) {
         if (is_newpage) {
             return '0' | 0x0B00;
+        } else if (is_filetable) {
+            return 'F' | 0x8F00;
         } else if (is_kernel) {
             return 'K' | 0x4000;
         } else if (is_reserved) {
@@ -196,15 +199,17 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
         return 'R' | 0x0C00;
     } else if (is_reserved) {
         return 'R' | 0x0700;
-    } else if (is_kernel && !is_newpage && pid != 0 && separate_tables_) {
+    } else if (is_newpage) {
+        return '0' | 0x0B00;
+    } else if (is_filetable) {
+        return 'F' | 0x8F00;
+    } else if (is_kernel && pid != 0 && separate_tables_) {
         page_error(pa, "kernel data page mapped for user", marked_pid(v));
         return 'K' | 0xCD00;
-    } else if (is_kernel && !is_newpage) {
+    } else if (is_kernel) {
         return 'K' | 0x0D00;
     } else if (pa >= MEMSIZE_PHYSICAL) {
         return ' ' | 0x0700;
-    } else if (is_newpage) {
-        return '0' | 0x0B00;
     } else {
         auto vx = v & ~f_nonidentity;
         if (vx == 0) {

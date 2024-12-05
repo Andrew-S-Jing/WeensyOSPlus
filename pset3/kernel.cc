@@ -1,6 +1,7 @@
 #include "kernel.hh"
 #include "k-apic.hh"
 #include "k-vmiter.hh"
+#include "k-fditer.hh"
 #include "obj/k-firstprocess.h"
 #include <atomic>
 
@@ -44,6 +45,12 @@ ssize_t ncommittable() {
 #define NCOMMIT_MAX SSIZE_MAX
 const ncommit_t NCOMMITTABLE = ncommittable();
 ncommit_t ncommitted = 0;
+
+
+// FILETABLE
+//    The `weensy_filetable*` casting of the kernel filetable.
+
+#define FILETABLE (reinterpret_cast<weensy_filetable*>(FILETABLE_ADDR))
 
 
 // multflag(flags, desired_flags)
@@ -97,13 +104,15 @@ void kernel_start(const char* command) {
 
     // zero the universal newpage
     memset(pa2kptr(NEWPAGE_ADDR), 0, PAGESIZE);
+    // zero the filetable
+    memset(pa2kptr(FILETABLE_ADDR), 0, PAGESIZE);
     
     // check that `physpageinfo::refcount` type can handle max refs to newpage
     physpageinfo max;
     --max.refcount;
     assert(max.refcount >= PID_MAX * (MEMSIZE_VIRTUAL / PAGESIZE));
 
-    // (re-)initialize kernel page table (kernel pages are shared)
+    // (re-)initialize kernel pagetable (kernel pages are shared)
     for (uintptr_t addr = 0; addr < MEMSIZE_PHYSICAL; addr += PAGESIZE) {
         uint64_t perm = PTE_PWU;
 
@@ -118,13 +127,36 @@ void kernel_start(const char* command) {
 
         // non-kernel memory should not be executable
         if (reserved_physical_address(addr)
-                || allocatable_physical_address(addr)) {
+                || allocatable_physical_address(addr)
+                || addr == NEWPAGE_ADDR
+                || addr == FILETABLE_ADDR) {
             perm |= PTE_XD;
         }
         // install identity mapping
         int r = vmiter(kernel_pagetable, addr).try_map(addr, perm);
         assert(r == 0); // mappings during kernel_start MUST NOT fail
                         // (Note that later mappings might fail!!)
+    }
+
+    // Create files
+    {
+        // Make list of filenames
+        const char* filenames[] {
+            "Andrew",
+            "Jing",
+            "is",
+            "systems",
+            "nerd"
+        };
+
+        // Map files
+        weensy_filetable* ft = reinterpret_cast<weensy_filetable*>(FILETABLE_ADDR);
+        for (auto name : filenames) {
+            void* f = kalloc(PAGESIZE);
+            assert(f);
+            int r = file_try_map(ft, f, file_name(name));
+            assert(!r);
+        }
     }
 
     // set up process descriptors
@@ -202,6 +234,7 @@ void* kalloc(size_t sz) {
 //    Free `kptr`, which must have been previously returned by `kalloc`.
 //    If `kptr == nullptr`, does nothing.
 //    Decommits as needed, always decommits page for private (`is_private`).
+//    `is_private` should only be set if page is user accessible and private.
 
 void kfree(void* kptr, bool is_private) {
     if (!kptr) return;
@@ -256,6 +289,8 @@ void kcleanup(pid_t pid) {
     assert(pid > 0 && pid < PID_MAX && ptable[pid].state != P_FREE);
     kfree_pagetable(ptable[pid].pagetable);
     ptable[pid].pagetable = nullptr;
+    kfree(ptable[pid].fdtable, false);
+    ptable[pid].fdtable = nullptr;
     memset(&ptable[pid].regs, 0, sizeof(regstate));
     ptable[pid].state = P_FREE;
 }
@@ -293,7 +328,11 @@ int kpage_alloc(pid_t pid, uintptr_t va, uint64_t perm) {
 void process_setup(pid_t pid, const char* program_name) {
     init_process(&ptable[pid], 0);
 
-    // initialize process page table
+    // initialize process fdtable
+    ptable[pid].fdtable = kalloc_fdtable();
+    assert (ptable[pid].fdtable);
+
+    // initialize process pagetable
     ptable[pid].pagetable = kalloc_pagetable();
     assert(ptable[pid].pagetable);
     // Map kernel mem to user pagetable
@@ -482,6 +521,8 @@ void exception(regstate* regs) {
 
 
 // These functions are defined farther below
+int syscall_open(const char* pathname_vptr);
+int syscall_close(int fd);
 void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                    int fd, off_t offset);
 pid_t syscall_fork();
@@ -533,6 +574,12 @@ uintptr_t syscall(regstate* regs) {
     case SYSCALL_YIELD:
         current->regs.reg_rax = 0;
         schedule();             // does not return
+
+    case SYSCALL_OPEN:
+        return syscall_open(reinterpret_cast<const char*>(current->regs.reg_rdi));
+
+    case SYSCALL_CLOSE:
+        return syscall_close(current->regs.reg_rdi);
 
     case SYSCALL_MMAP:
         return kptr2pa(syscall_mmap(current->regs.reg_rdi,
@@ -649,13 +696,13 @@ void* pte_next_down(x86_64_pageentry_t pte) {
 void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                    int fd, off_t offset) {
 
-    if (fd != -1) return MAP_FAILED;           // File mapping not implemented
-
-    (void) flags, (void) fd, (void) offset;
+    (void) offset;
 
     // Entry errors
     // Mapping only implemented for whole pages
     if (length & PAGEOFFMASK) return MAP_FAILED;
+    // Files are currently all exactly one page long
+    if (length > PAGESIZE && !(flags & MAP_ANON)) return MAP_FAILED;
     // Check flags for `MAP_PRIVATE` xor `MAP_SHARED`
     if ((bool) (flags & MAP_PRIVATE) == (bool) (flags & MAP_SHARED)) {
         return MAP_FAILED;
@@ -771,7 +818,11 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     
     // Files not implemented (must be `MAP_ANON`)
     } else {
-        return MAP_FAILED;
+        uintptr_t file = fd_find_pa(current->fdtable, fd);
+        if (file == 0) return MAP_FAILED;
+        vmiter(current->pagetable, addr).map(file, perm);
+        ++physpages[file / PAGESIZE].refcount;
+        if (prot & PROT_WRITE) ++ncommitted;
     }
 
     return pa2kptr(addr);
@@ -809,6 +860,12 @@ pid_t syscall_fork() {
     if (!ptable[pid].pagetable) return -2;
     ptable[pid].regs = current->regs;
     ptable[pid].state = P_RUNNABLE;
+    ptable[pid].fdtable = kalloc_fdtable();
+    if (!ptable[pid].fdtable) {
+        kcleanup(pid);
+        return -2;
+    }
+    memcpy(ptable[pid].fdtable, current->fdtable, PAGESIZE);
 
     // Copy parent's mem mappings into new child's pagetable
     for (vmiter it(current->pagetable, 0); !it.done(); it.next()) {
@@ -862,6 +919,65 @@ pid_t syscall_fork() {
 }
 
 
+// syscall_open(pathname_vptr)
+//    Returns an FD that is newly mapped to the process's fdtable.
+//    Returns `-1` on failure.
+
+int syscall_open(const char* pathname_vptr) {
+    uintptr_t pathname_va = kptr2pa(pathname_vptr);
+    if (pathname_va < PROC_START_ADDR || pathname_va >= MEMSIZE_VIRTUAL) {
+        return -1;
+    }
+    vmiter pte(current->pagetable, pathname_va);
+    const char* pathname1 = reinterpret_cast<const char*>(pte.kptr());
+    const char* page_end = pathname1 + PAGESIZE - (pathname_va & PAGEOFFMASK);
+    if (!pathname1) return -1;
+
+    char pathname[sizeof(filename_t) + 1] = {'\0'};
+
+    bool is_pathname_done = false;
+    unsigned pathname_length = 0;
+    for (; &pathname1[pathname_length] != page_end; ++pathname_length) {
+        if (pathname_length > sizeof(filename_t)) return -1;
+        if (pathname1[pathname_length] == '\0') {
+            is_pathname_done = true;
+            break;
+        }
+        pathname[pathname_length] = pathname1[pathname_length];
+    }
+
+    if (!is_pathname_done) {
+        pte += pathname_length;
+        assert(!(pte.va() & PAGEOFFMASK));
+        const char* pathname2 = reinterpret_cast<const char*>(pte.kptr());
+        if (!pathname2) return -1;
+
+        for (; ; ++pathname_length) {
+            if (pathname_length > sizeof(filename_t)) return -1;
+            if (pathname2[pathname_length] == '\0') {
+                is_pathname_done = true;
+                break;
+            }
+            pathname[pathname_length] = pathname2[pathname_length];
+        }
+    }
+
+    filename_t filename = file_name(pathname);
+    uintptr_t pa = file_find_pa(FILETABLE, filename);
+    if (!pa) return -1;
+    return fd_set_pa(current->fdtable, pa);
+}
+
+
+// syscall_close(fd)
+//    Returns `0` on success and `-1` on failure (e.g. `fd` not already open).
+
+int syscall_close(int fd) {
+    if (fd < 0 || fd >= NFDENTRIES) return -1;
+    return fd_delete(current->fdtable, fd);
+}
+
+
 // schedule
 //    Pick the next process to run and then run it.
 //    If there are no runnable processes, spins forever.
@@ -883,7 +999,7 @@ void schedule() {
 
 // run(p)
 //    Run process `p`. This involves setting `current = p` and calling
-//    `exception_return` to restore its page table and registers.
+//    `exception_return` to restore its pagetable and registers.
 
 void run(proc* p) {
     assert(p->state == P_RUNNABLE);

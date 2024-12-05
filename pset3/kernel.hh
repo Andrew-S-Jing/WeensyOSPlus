@@ -16,6 +16,31 @@ class vmiter;
 //    Functions, constants, and definitions for the kernel.
 
 
+// Filetable entry type and filetable type
+typedef struct filename_t {
+    uint8_t x[24];
+} filename_t;
+static const filename_t FILENAME_NONE = {0U};
+
+typedef struct __attribute__((aligned(32))) fileentry_t {
+    filename_t filename;
+    uint64_t filestart;
+} fileentry_t;
+static const fileentry_t FILEENTRY_NONE = {{0}, 0};
+
+typedef struct __attribute__((aligned(PAGESIZE))) weensy_filetable {
+    fileentry_t entries[PAGESIZE / sizeof(fileentry_t)];
+} weensy_filetable;
+
+// Fdtable entry type and fdtable type
+typedef uint64_t fdentry_t;
+
+typedef struct __attribute__((aligned(PAGESIZE))) weensy_fdtable {
+    fdentry_t entries[PAGESIZE / sizeof(fdentry_t)];
+} weensy_fdtable;
+#define NFDENTRIES 512
+
+
 // Process state constants
 #define P_FREE      0                   // free slot
 #define P_RUNNABLE  1                   // runnable process
@@ -24,11 +49,13 @@ class vmiter;
 
 // Process descriptor type
 struct proc {
-    x86_64_pagetable* pagetable;        // process's page table
+    x86_64_pagetable* pagetable;        // process's pagetable
     pid_t pid;                          // process ID
     int state;                          // process state (see above)
     regstate regs;                      // process's current registers
     // The first 4 members of `proc` must not change, but you can add more.
+
+    weensy_fdtable* fdtable;            // process's fdtable
 };
 
 // Process table
@@ -45,6 +72,12 @@ extern proc ptable[PID_MAX];
 
 // Universal newpage (zeroed page for anonymous mapping/allocation)
 #define NEWPAGE_ADDR            0x1000
+
+// Address of filetable page
+#define FILETABLE_ADDR          0x2000
+// One filetable entry is composed of 24 bytes for filename and 8 bytes
+// for the phys addr of the file
+// Currently, a max of `PAGESIZE / 32 == 128` files can exist concurrently.
 
 // Physical memory size
 #define MEMSIZE_PHYSICAL        0x200000
@@ -114,7 +147,7 @@ void* kalloc(size_t sz);
 void kfree(void* ptr, bool cow);
 
 
-// kernel page table (used for virtual memory)
+// kernel pagetable (used for virtual memory)
 extern x86_64_pagetable kernel_pagetable[];
 
 // reserved_physical_address(pa)
@@ -126,7 +159,7 @@ bool reserved_physical_address(uintptr_t pa);
 bool allocatable_physical_address(uintptr_t pa);
 
 // kalloc_pagetable
-//    Allocate and initialize a new,e empty level-4 page table.
+//    Allocate and initialize a new,e empty level-4 pagetable.
 x86_64_pagetable* kalloc_pagetable();
 
 // check_process_registers
@@ -134,12 +167,12 @@ x86_64_pagetable* kalloc_pagetable();
 void check_process_registers(const proc* p);
 
 // check_pagetable
-//    Validate a page table by checking that important kernel procedures
+//    Validate a pagetable by checking that important kernel procedures
 //    are mapped at the expected addresses.
 void check_pagetable(x86_64_pagetable* pagetable);
 
 // set_pagetable
-//    Change page table after checking it.
+//    Change pagetable after checking it.
 void set_pagetable(x86_64_pagetable* pagetable);
 
 // check_page_table_mappings
@@ -158,7 +191,7 @@ void exception_entry();
 void syscall_entry();
 
 // exception_return
-//    Return from an exception to user mode: load the page table
+//    Return from an exception to user mode: load the pagetable
 //    and registers and start the process back up. Defined in k-exception.S.
 [[noreturn]] void exception_return(proc* p);
 

@@ -44,11 +44,11 @@ void init_hardware() {
 
 
 // init_kernel_memory
-//    Set up early-stage segment registers and kernel page table.
+//    Set up early-stage segment registers and kernel pagetable.
 //
 //    The early-stage segment registers and global descriptors are
-//    used during hardware initialization. The kernel page table is
-//    used whenever no appropriate process page table exists.
+//    used during hardware initialization. The kernel pagetable is
+//    used whenever no appropriate process pagetable exists.
 //
 //    The interrupt descriptor table tells the processor where to jump
 //    when an interrupt or exception happens. See k-exception.S.
@@ -106,7 +106,7 @@ void init_kernel_memory() {
     asm volatile("lgdt %0" : : "m" (gdt.limit));
 
 
-    // initialize kernel page table
+    // initialize kernel pagetable
     memset(kernel_pagetable, 0, sizeof(kernel_pagetable));
     kernel_pagetable[0].entry[0] =
         kptr2pa(&kernel_pagetable[1]) | PTE_P | PTE_W | PTE_U;
@@ -283,7 +283,7 @@ void init_timer(int rate) {
 
 
 // kalloc_pagetable
-//    Allocate and return a new, empty page table.
+//    Allocate and return a new, empty pagetable.
 
 x86_64_pagetable* kalloc_pagetable() {
     x86_64_pagetable* pt = reinterpret_cast<x86_64_pagetable*>(kalloc(PAGESIZE));
@@ -305,7 +305,7 @@ void check_process_registers(const proc* p) {
 
 
 // check_pagetable
-//    Validate a page table by checking that important kernel procedures
+//    Validate a pagetable by checking that important kernel procedures
 //    are mapped at the expected addresses.
 
 void check_pagetable(x86_64_pagetable* pagetable) {
@@ -320,7 +320,7 @@ void check_pagetable(x86_64_pagetable* pagetable) {
 
 
 // set_pagetable
-//    Change page table after checking it.
+//    Change pagetable after checking it.
 
 void set_pagetable(x86_64_pagetable* pagetable) {
     check_pagetable(pagetable);
@@ -352,6 +352,8 @@ bool allocatable_physical_address(uintptr_t pa) {
             || pa >= KERNEL_STACK_TOP)
         && (pa < NEWPAGE_ADDR
             || pa >= NEWPAGE_ADDR + PAGESIZE)
+        && (pa < FILETABLE_ADDR
+            || pa >= FILETABLE_ADDR + PAGESIZE)
         && pa < MEMSIZE_PHYSICAL;
 }
 
@@ -845,10 +847,11 @@ int check_keyboard() {
     int c = keyboard_readc();
     if (c == 'a' || c == 'f' || c == 'e'
             || c == 'k' || c == 'n'
-            || c == 'm' || c == 's' || c == 'r' || c == 'l') {
+            || c == 'm' || c == 's' || c == 'r' || c == 'l'
+            || c == 'd') {
         // Turn off the timer interrupt.
         init_timer(-1);
-        // Install a temporary page table to carry us through the
+        // Install a temporary pagetable to carry us through the
         // process of reinitializing memory. This replicates work the
         // bootloader does.
         x86_64_pagetable* pt = (x86_64_pagetable*) 0x1000;
@@ -878,6 +881,8 @@ int check_keyboard() {
             argument = "mmaprandom";
         } else if (c == 'l') {
             argument = "mmaplength";
+        } else if (c == 'd') {
+            argument = "mmapfile";
         }
         uintptr_t argument_ptr = (uintptr_t) argument;
         assert(argument_ptr < 0x100000000L);

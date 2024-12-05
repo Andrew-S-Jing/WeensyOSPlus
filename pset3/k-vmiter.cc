@@ -13,8 +13,8 @@ void vmiter::down() {
     }
     if ((*pep_ & PTE_PAMASK) >= 0x100000000UL
         && lbits_ < PAGEOFFBITS + 2 * PAGEINDEXBITS) {
-        panic("Page table %p may contain uninitialized memory!\n"
-              "(Page table contents: %p)\n", pt_, *pep_);
+        panic("pagetable %p may contain uninitialized memory!\n"
+              "(pagetable contents: %p)\n", pt_, *pep_);
     }
 }
 
@@ -25,7 +25,7 @@ void vmiter::real_find(uintptr_t va, bool stepping) {
         pep_ = const_cast<x86_64_pageentry_t*>(&zero_pe);
     } else if (lbits_ < initial_lbits
                && ((va_ ^ va) & (~uintptr_t(0) << (lbits_ + PAGEINDEXBITS))) == 0) {
-        // stepping to next entry in current page table level
+        // stepping to next entry in current pagetable level
         int curidx = (reinterpret_cast<uintptr_t>(pep_) % PAGESIZE) >> 3;
         pep_ += ((va >> lbits_) & 0x1FF) - curidx;
     } else if (!va_is_canonical(va)) {
@@ -63,7 +63,7 @@ int vmiter::try_map(uintptr_t pa, uint64_t perm) {
         assert((pa & PTE_P) == 0, "vmiter::try_map invalid pa");
     }
     // new permissions (`perm`) cannot be less restrictive than permissions
-    // imposed by higher-level page tables (`perm_`)
+    // imposed by higher-level pagetables (`perm_`)
     assert(!(perm & ~perm_ & (PTE_P | PTE_W | PTE_U)));
 
     while (lbits_ > PAGEOFFBITS && perm) {

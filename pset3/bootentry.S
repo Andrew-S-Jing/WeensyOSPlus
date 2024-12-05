@@ -25,7 +25,7 @@
 #   mode. The machine acts like addresses are only 16 bits long,
 #   there's no paging support, and there isn't even any support for
 #   user-mode applications. The following weird magic transitions the
-#   processor to 64-bit mode and sets up a page table suitable for initial
+#   processor to 64-bit mode and sets up a pagetable suitable for initial
 #   kernel execution. More recent iterations of 64-bit processors boot
 #   directly into 64-bit mode.
 #
@@ -52,17 +52,17 @@ notify_bios64:
         int     $0x15
 
 init_boot_pagetable:
-        # clear memory for boot page table
+        # clear memory for boot pagetable
         .set BOOT_PAGETABLE,0x1000
         movl    $BOOT_PAGETABLE, %edi
         xorl    %eax, %eax
         movl    $(0x2000 / 4), %ecx
         rep stosl
 
-        # set up boot page table
-        # 0x1000: L4 page table; entries 0, 256, and 511 point to:
-        # 0x2000: L3 page table; entries 0 and 510 map 1st 1GB of physmem
-        # This is the minimal page table that maps all of
+        # set up boot pagetable
+        # 0x1000: L4 pagetable; entries 0, 256, and 511 point to:
+        # 0x2000: L3 pagetable; entries 0 and 510 map 1st 1GB of physmem
+        # This is the minimal pagetable that maps all of
         # low-canonical, high-canonical, and kernel-text addresses to
         # the first 1GB of physical memory.
         movl    $BOOT_PAGETABLE, %edi

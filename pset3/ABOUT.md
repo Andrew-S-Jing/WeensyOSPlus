@@ -138,7 +138,7 @@ more fundamental issues.
 | `kernel.hh`         | Kernel declarations                  |
 | `k-exception.S`     | Kernel entry points                  |
 | `k-hardware.cc`     | Kernel initialization and hardware   |
-| `k-vmiter.hh/cc`    | Page table iterators                 |
+| `k-vmiter.hh/cc`    | pagetable iterators                 |
 | `kernel.cc`         | Kernel exception handlers            |
 | `k-memviewer.cc`    | Kernel memory viewer                 |
 | `build/kernel.ld`   | Kernel linker script                 |

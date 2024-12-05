@@ -132,19 +132,33 @@ inline void sys_yield() {
 //    >= PROC_START_ADDR, and < MEMSIZE_VIRTUAL. If any of these requirements
 //    are not met, returns a negative error code without modifying memory.
 inline int sys_page_alloc(void* addr) {
-    return make_syscall(SYSCALL_PAGE_ALLOC, (uintptr_t) addr);
+    return make_syscall(SYSCALL_PAGE_ALLOC, reinterpret_cast<uintptr_t>(addr));
 }
 
 // sys_mmap(addr, length, prot, flags, fd, offset)
+//    See specs of `syscall_mmap` in "kernel.cc".
 inline void* sys_mmap(void* addr, size_t length, int prot, int flags,
                       int fd, off_t offset) {
+    uintptr_t addr_ = reinterpret_cast<uintptr_t>(addr);
     return reinterpret_cast<void*>(make_syscall(SYSCALL_MMAP,
-                                                (uintptr_t) addr,
+                                                addr_,
                                                 length,
                                                 prot,
                                                 flags,
                                                 fd,
                                                 offset));
+}
+
+// sys_open(pathname)
+//    Returns and FD for the file at `pathname` or `-1` on failure.
+inline int sys_open(const char* pathname) {
+    return make_syscall(SYSCALL_OPEN, reinterpret_cast<uintptr_t>(pathname));
+}
+
+// sys_close(fd)
+//    Returns `0` on success and `-1` on failure.
+inline int sys_close(int fd) {
+    return make_syscall(SYSCALL_CLOSE, fd);
 }
 
 // sys_fork()

@@ -3,7 +3,7 @@
 #include "kernel.hh"
 class ptiter;
 
-// `vmiter` and `ptiter` are iterator types for x86-64 page tables.
+// `vmiter` and `ptiter` are iterator types for x86-64 pagetables.
 
 
 // `vmiter` retrieves virtual address mappings.
@@ -16,7 +16,7 @@ class vmiter {
     inline vmiter(x86_64_pagetable* pt, uintptr_t va);
     inline vmiter(const proc* p, uintptr_t va);
 
-    // Return page table
+    // Return pagetable
     inline x86_64_pagetable* pagetable() const;
 
     // ADDRESS QUERIES
@@ -87,7 +87,7 @@ class vmiter {
     // Change the mapping in `this->pagetable()` for `this->va()` (the
     // current virtual address) to `pa` with permissions `perm`.
     // `this->va()` must be page-aligned. Might call `kalloc` to allocate
-    // page table pages. Panics if `kalloc` fails (returns `nullptr`).
+    // pagetable pages. Panics if `kalloc` fails (returns `nullptr`).
     inline void map(uintptr_t pa, uint64_t perm);
     // Same, but map a kernel pointer
     inline void map(void* kptr, uint64_t perm);
@@ -96,7 +96,7 @@ class vmiter {
     // Change the mapping in `this->pagetable()` for `this->va()` (the
     // current virtual address) to `pa` with permissions `perm`.
     // `this->va()` must be page-aligned. Might call `kalloc` to allocate
-    // page table pages. On success, changes the mapping and returns 0.
+    // pagetable pages. On success, changes the mapping and returns 0.
     // If `kalloc` fails, returns a negative error code without modifying
     // any mappings.
     [[gnu::warn_unused_result]] int try_map(uintptr_t pa, uint64_t perm);
@@ -124,16 +124,16 @@ class vmiter {
 };
 
 
-// `ptiter` walks over the page table pages in a page table,
+// `ptiter` walks over the pagetable pages in a pagetable,
 // returning them in depth-first order.
-// This is mainly useful when freeing a page table, as in:
+// This is mainly useful when freeing a pagetable, as in:
 // ```
 // for (ptiter it(pt); !it.done(); it.next()) {
 //     kfree(it.kptr());
 // }
 // kfree(pt);
 // ```
-// Note that `ptiter` will never visit the root (level-4) page table page.
+// Note that `ptiter` will never visit the root (level-4) pagetable page.
 
 class ptiter {
   public:
@@ -141,22 +141,22 @@ class ptiter {
     ptiter(x86_64_pagetable* pt);
     inline ptiter(const proc* p);
 
-    // Return true once `ptiter` has iterated over all page table pages
-    // (not including the top-level page table page)
+    // Return true once `ptiter` has iterated over all pagetable pages
+    // (not including the top-level pagetable page)
     inline bool done() const;
 
-    // Return physical address of current page table page
+    // Return physical address of current pagetable page
     inline uintptr_t pa() const;
-    // Return kernel-accessible pointer to the current page table page
+    // Return kernel-accessible pointer to the current pagetable page
     inline x86_64_pagetable* kptr() const;
-    // Move to next page table page in depth-first order
+    // Move to next pagetable page in depth-first order
     inline void next();
 
     // Return current virtual address
     inline uintptr_t va() const;
     // Return one past the last virtual address in this mapping range
     inline uintptr_t last_va() const;
-    // Return level of current page table page (0-2)
+    // Return level of current pagetable page (0-2)
     inline int level() const;
 
   private:

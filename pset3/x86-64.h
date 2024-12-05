@@ -74,7 +74,7 @@ static inline __constexpr bool va_is_canonical(uintptr_t va) {
 }
 
 
-// Page table entry type and page table type
+// pagetable entry type and pagetable type
 typedef struct __attribute__((aligned(PAGESIZE))) x86_64_page {
     uint8_t x[PAGESIZE];
 } x86_64_page;
