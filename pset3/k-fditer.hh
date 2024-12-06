@@ -81,6 +81,8 @@ int file_try_map(weensy_filetable* ft, uintptr_t pa, filename_t filename) {
     *nextvacant = fe;
     std::atomic_thread_fence((std::memory_order_release));
     memset(reinterpret_cast<void*>(pa), 0, PAGESIZE);
+    std::atomic_thread_fence((std::memory_order_release));
+    physpages[pa / PAGESIZE].filechar = filename.characters[0];
 
     return 0;
 }
@@ -151,17 +153,18 @@ int fd_set_kptr(weensy_fdtable* fdt, void* kptr) {
 
 // fd_delete(fdt, fd)
 //    Delete the fdentry for `fd` in `fdt`.
-//    Returns `0` on success and `-1` on failure.
+//    Returns phys addr of file on success and `0` on failure.
 
-int fd_delete(weensy_fdtable* fdt, int fd) {
+uintptr_t fd_delete(weensy_fdtable* fdt, int fd) {
     // Entry errors
     assert(fdt, "fd_delete no fdt provided");
     assert(fd >= 0 && fd < NFDENTRIES,
         "fd_delete bad fd");
 
-    if (fdt->entries[fd] == 0) return -1;
+    uintptr_t r = fdt->entries[fd];
+    assert(!(r & PAGEOFFMASK));
     fdt->entries[fd] = 0;
-    return 0;
+    return r;
 }
 
 #endif

@@ -142,11 +142,15 @@ void kernel_start(const char* command) {
     {
         // Make list of filenames
         const char* filenames[] {
-            "Andrew",
-            "Jing",
-            "is",
-            "systems",
-            "nerd"
+            "user file",
+            "controller file",
+            "kernel file",
+            "system file",
+            "GNU C++ code file",
+            "internet protocols file",
+            "virtual hardware file",
+            "emulators file",
+            "new file"
         };
 
         // Map files
@@ -276,6 +280,15 @@ void kfree_pagetable(x86_64_pagetable* pt) {
 
     // Free level 4 pagetable page
     kfree(pt, false);
+}
+
+
+void kfree_fdtable(weensy_fdtable* fdt) {
+    if (!fdt) return;
+
+    for (auto file : fdt->entries) {
+        if (file) --physpages[file / PAGESIZE].refcount;
+    }
 }
 
 
@@ -818,11 +831,19 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     
     // Files not implemented (must be `MAP_ANON`)
     } else {
-        uintptr_t file = fd_find_pa(current->fdtable, fd);
-        if (file == 0) return MAP_FAILED;
-        vmiter(current->pagetable, addr).map(file, perm);
-        ++physpages[file / PAGESIZE].refcount;
-        if (prot & PROT_WRITE) ++ncommitted;
+        void* file = fd_find_kptr(current->fdtable, fd);
+        if (!file) return MAP_FAILED;
+
+        void* map_kptr = file;
+        if (prot & PROT_WRITE) {
+            ++physpages[kptr2pa(file) / PAGESIZE].refcount;
+            if (flags & MAP_PRIVATE) ++ncommitted;
+        } else {
+            map_kptr = kalloc(PAGESIZE);
+            if (!map_kptr) return MAP_FAILED;
+            memcpy(map_kptr, file, PAGESIZE);
+        }
+        vmiter(current->pagetable, addr).map(map_kptr, perm);
     }
 
     return pa2kptr(addr);
@@ -860,12 +881,17 @@ pid_t syscall_fork() {
     if (!ptable[pid].pagetable) return -2;
     ptable[pid].regs = current->regs;
     ptable[pid].state = P_RUNNABLE;
+
+    // Copy fdtable
     ptable[pid].fdtable = kalloc_fdtable();
     if (!ptable[pid].fdtable) {
         kcleanup(pid);
         return -2;
     }
-    memcpy(ptable[pid].fdtable, current->fdtable, PAGESIZE);
+    memcpy(ptable[pid].fdtable, current->fdtable, sizeof(weensy_fdtable));
+    for (auto file : ptable[pid].fdtable->entries) {
+        if (file) ++physpages[file / PAGESIZE].refcount;
+    }
 
     // Copy parent's mem mappings into new child's pagetable
     for (vmiter it(current->pagetable, 0); !it.done(); it.next()) {
@@ -971,7 +997,9 @@ int syscall_open(const char* pathname_vptr) {
     filename_t filename = file_name(pathname);
     uintptr_t pa = file_find_pa(FILETABLE, filename);
     if (!pa) return -1;
-    return fd_set_pa(current->fdtable, pa);
+    int r = fd_set_pa(current->fdtable, pa);
+    if (r >= 0) ++physpages[pa / PAGESIZE].refcount;
+    return r;
 }
 
 
@@ -980,7 +1008,10 @@ int syscall_open(const char* pathname_vptr) {
 
 int syscall_close(int fd) {
     if (fd < 0 || fd >= NFDENTRIES) return -1;
-    return fd_delete(current->fdtable, fd);
+    uintptr_t file = fd_delete(current->fdtable, fd);
+    if (file == 0) return -1;
+    --physpages[file / PAGESIZE].refcount;
+    return 0;
 }
 
 

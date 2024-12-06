@@ -18,7 +18,7 @@ class vmiter;
 
 // Filetable entry type and filetable type
 typedef struct filename_t {
-    uint8_t x[24];
+    uint8_t characters[24];
 } filename_t;
 static const filename_t FILENAME_NONE = {0U};
 
@@ -103,6 +103,7 @@ extern proc ptable[PID_MAX];
 //    The memory viewer calls `used()` and `valid()` to check for bugs.
 struct physpageinfo {
     uint16_t refcount = 0;
+    char filechar = '\0';           // First character of file pathname, if any
 
     bool used() const {
         return this->refcount != 0;

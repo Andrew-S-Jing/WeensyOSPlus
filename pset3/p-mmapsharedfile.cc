@@ -46,16 +46,7 @@ void process_main() {
     while (heap_top != stack_bottom) {
         int x = rand(0, 6 * ALLOC_SLOWDOWN);
         if (x >= 8 * speed) {
-            if (x % 4 < 2 && heap_top != heap_bottom) {
-                unsigned pn = rand(0, (heap_top - heap_bottom - 1) / PAGESIZE);
-                if (pn < sizeof(pagemark)) {
-                    volatile uint8_t* addr = heap_bottom + pn * PAGESIZE;
-                    assert(*addr == pagemark[pn]);
-                    pagemark[pn] = self;
-                    *addr = self;
-                    assert(*addr == self);
-                }
-            }
+            // do not check consistency of shared mem
             sys_yield();
             continue;
         }
@@ -78,27 +69,18 @@ void process_main() {
             void* r1 = sys_mmap(nullptr,
                                 PAGESIZE,
                                 PROT_READ | PROT_WRITE | PROT_EXEC,
-                                MAP_PRIVATE,
+                                MAP_SHARED,
                                 fd,
                                 0);
             int r2 = sys_close(fd);
             assert(r2 == 0);
             if (r1 != MAP_FAILED) {
-                // check that the page starts out all zero
-                for (unsigned long* l = (unsigned long*) heap_top;
-                    l != (unsigned long*) (heap_top + PAGESIZE);
-                    ++l) {
-                    assert(*l == 0);
-                }
+                // do not check that the page starts out all zero
                 // check we can write to new page
                 *heap_top = speed;
                 // check we can write to console
                 console[CPOS(24, 79)] = speed;
-                // record data written
-                unsigned pn = (heap_top - heap_bottom) / PAGESIZE;
-                if (pn < sizeof(pagemark)) {
-                    pagemark[pn] = speed;
-                }
+                // do not record data written
                 // update `heap_top`
                 heap_top += PAGESIZE;
                 nalloc = (heap_top - heap_bottom) / PAGESIZE;

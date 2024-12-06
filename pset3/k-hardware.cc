@@ -848,7 +848,7 @@ int check_keyboard() {
     if (c == 'a' || c == 'f' || c == 'e'
             || c == 'k' || c == 'n'
             || c == 'm' || c == 's' || c == 'r' || c == 'l'
-            || c == 'd') {
+            || c == 'p' || c == 'o') {
         // Turn off the timer interrupt.
         init_timer(-1);
         // Install a temporary pagetable to carry us through the
@@ -881,8 +881,10 @@ int check_keyboard() {
             argument = "mmaprandom";
         } else if (c == 'l') {
             argument = "mmaplength";
-        } else if (c == 'd') {
+        } else if (c == 'p') {
             argument = "mmapfile";
+        } else if (c == 'o') {
+            argument = "mmapsharedfile";
         }
         uintptr_t argument_ptr = (uintptr_t) argument;
         assert(argument_ptr < 0x100000000L);

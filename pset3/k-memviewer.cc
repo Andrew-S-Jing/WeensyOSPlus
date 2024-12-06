@@ -123,6 +123,8 @@ void memusage::refresh() {
                     it.next_range();
                 }
             }
+
+            mark(kptr2pa(p->fdtable), f_kernel | pidflag);
         }
     }
 
@@ -165,17 +167,16 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
     bool is_filetable = pa == FILETABLE_ADDR;
 
     unsigned pn = pa / PAGESIZE;
+    char is_file_and_char = physpages[pn].filechar;
     if (pn < NPAGES && !physpages[pn].valid()) {
-        // The newpage may have more than one reference per process
-        if (!is_newpage) page_error(pa, "invalid reference count", -1);
+        // The newpage and files may have more than one reference per process
+        if (!is_newpage && !is_file_and_char) {
+            page_error(pa, "invalid reference count", -1);
+        }
     }
 
     if (pa >= maxpa) {
-        if (is_newpage) {
-            return '0' | 0x0B00;
-        } else if (is_filetable) {
-            return 'F' | 0x8F00;
-        } else if (is_kernel) {
+        if (is_kernel) {
             return 'K' | 0x4000;
         } else if (is_reserved) {
             return '?' | 0x4000;
@@ -202,7 +203,7 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
     } else if (is_newpage) {
         return '0' | 0x0B00;
     } else if (is_filetable) {
-        return 'F' | 0x8F00;
+        return 'F' | 0x8000;
     } else if (is_kernel && pid != 0 && separate_tables_) {
         page_error(pa, "kernel data page mapped for user", marked_pid(v));
         return 'K' | 0xCD00;
@@ -214,6 +215,11 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
         auto vx = v & ~f_nonidentity;
         if (vx == 0) {
             if (physpages[pn].used()) {
+                // File physpages
+                if (is_file_and_char) {
+                    return is_file_and_char | 0x0800;
+                }
+
                 // Leaked page: used but not referenced by anything we know
                 return 'L' | 0x0300;
             } else {
@@ -231,6 +237,11 @@ uint16_t memusage::symbol_at(uintptr_t pa) const {
             // foreground color is that associated with `pid`
             static const uint8_t colors[] = { 0xF, 0xC, 0xA, 0x9, 0xE };
             uint16_t ch = colors[pid % 5] << 8;
+
+            // Mapped file
+            if (is_file_and_char) {
+                return is_file_and_char | 0x0800;
+            }
             if (v & f_kernel) {
                 // kernel page: dark red background
                 ch = 0x4000 | (ch == 0x0C00 ? 0x0F00 : ch);
