@@ -946,7 +946,10 @@ int syscall_open(const char* pathname_vptr) {
         pathname[pathname_length] = pathname1[pathname_length];
     }
 
-    if (!is_pathname_done) {
+    // No empty pathnames
+    if (is_pathname_done && pathname_length == 0) return -1;
+
+    while (!is_pathname_done) {
         pte += pathname_length;
         assert(!(pte.va() & PAGEOFFMASK));
         const char* pathname2 = reinterpret_cast<const char*>(pte.kptr());
@@ -960,6 +963,9 @@ int syscall_open(const char* pathname_vptr) {
             }
             pathname[pathname_length] = pathname2[pathname_length];
         }
+
+        // No empty pathnames
+        if (is_pathname_done && pathname_length == 0) return -1;
     }
 
     filename_t filename = file_name(pathname);

@@ -109,16 +109,14 @@ filename_t file_name(const char* str) {
 uintptr_t fd_find_pa(weensy_fdtable* fdt, int fd) {
     // Entry errors
     assert(fdt, "fd_find_pa no fdt provided");
-    assert(fd >= 0 && fd < NFDENTRIES,
-        "fd_find_pa bad fd");
+    if (fd < 0 && fd >= NFDENTRIES) return 0;
     
     return fdt->entries[fd];
 }
 void* fd_find_kptr(weensy_fdtable* fdt, int fd) {
     // Entry errors
     assert(fdt, "fd_find_kptr no fdt provided");
-    assert(fd >= 0 && fd < NFDENTRIES,
-        "fd_find_kptr bad fd");
+    if (fd < 0 && fd >= NFDENTRIES) return 0;
 
     return pa2kptr(fd_find_pa(fdt, fd));
 }
