@@ -538,6 +538,7 @@ int syscall_open(const char* pathname_vptr);
 int syscall_close(int fd);
 void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                    int fd, off_t offset);
+int syscall_page_alloc(uintptr_t addr);
 pid_t syscall_fork();
 
 
@@ -603,18 +604,7 @@ uintptr_t syscall(regstate* regs) {
                                     current->regs.reg_r10));
 
     case SYSCALL_PAGE_ALLOC:
-        // `sys_page_alloc` does not specify `addr == nullptr` behavior
-        if (!current->regs.reg_rdi
-                || syscall_mmap(current->regs.reg_rdi,
-                                PAGESIZE,
-                                PROT_READ | PROT_WRITE | PROT_EXEC,
-                                MAP_PRIVATE | MAP_ANON,
-                                -1,
-                                0)
-                   == MAP_FAILED) {
-            return -1;
-        }
-        return 0;
+        return syscall_page_alloc(current->regs.reg_rdi);
 
     case SYSCALL_FORK:
         return syscall_fork();
@@ -721,8 +711,34 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
         return MAP_FAILED;
     }
 
+    uintptr_t end;
+
+    // `addr` is provided
+    if (addr) {
+        // Fail on misaligned or kernel memspace virt addr
+        bool inaccessible, misaligned;
+        inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
+        if (inaccessible) return MAP_FAILED;
+        misaligned = addr & PAGEOFFMASK;
+        if (misaligned) return MAP_FAILED;
+
+        // Test for valid range in virt mem space
+        end = addr + length;
+        bool overflow, end_inaccessible;
+        overflow = end < addr;
+        if (overflow) return MAP_FAILED;
+        end_inaccessible = end < PROC_START_ADDR || end >= MEMSIZE_VIRTUAL;
+        if (end_inaccessible) return MAP_FAILED;
+
+        // No overwriting previous pagetable mappings
+        for (vmiter pte(current->pagetable, addr);
+                 pte.va() < end;
+                 pte += PAGESIZE) {
+            if (pte.present()) return MAP_FAILED;
+        }
+
     // `addr == nullptr`, so must decide the virt addr to map onto
-    if (!addr) {
+    } else {
         // Find a free range of virt addrs that can fit `PAGESIZE` bytes
         uintptr_t free_start = 0;
         size_t free_length = 0;
@@ -746,14 +762,10 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
             }
         }
         if (!addr) return MAP_FAILED;        // Not enough virt mem
+        end = addr + length;
+        bool overflow = end < addr;
+        if (overflow) return MAP_FAILED;
     }
-
-    // Fail on misaligned or kernel memspace virt addr
-    bool misaligned, inaccessible;
-    inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
-    misaligned = addr & PAGEOFFMASK;
-    if (inaccessible) return MAP_FAILED;
-    if (misaligned) return MAP_FAILED;
 
     // Map newpage to user pagetable if enough pages committable for
     // both the new mem page and any new pagetable page(s)
@@ -765,7 +777,7 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     //      ** NOT INCORRECT, JUST USES MEM INEFFICIENTLY ON LARGE MMAPs **
     x86_64_pagetable* pt = current->pagetable;
     ssize_t npagesneeded = 0;
-    for (uintptr_t cursor = addr; cursor < addr + length; cursor += PAGESIZE) {
+    for (uintptr_t cursor = addr; cursor < end; cursor += PAGESIZE) {
 
         // Calculate lowest level of PTP that has the PTE for `cursor`
         x86_64_pagetable* ptp = pt;
@@ -808,7 +820,7 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
         bool use_newpage = !(flags & MAP_SHARED) || !(prot & PROT_WRITE);
 
         for (uintptr_t cursor = addr;
-                 cursor < addr + length;
+                 cursor < end;
                  cursor += PAGESIZE) {
             void* map_kptr = nullptr;
 
@@ -847,6 +859,29 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     }
 
     return pa2kptr(addr);
+}
+
+
+// syscall_page_alloc(addr)
+//    Implements specs for `sys_page_alloc` in "u-lib.hh".
+
+int syscall_page_alloc(uintptr_t addr) {
+
+    // Free a single page if needed
+    if (!addr) return -1;
+    if (!(addr & PAGEOFFMASK)) {
+        vmiter pte(current->pagetable, addr);
+        if (pte.user()) kfree(pte.kptr(), pte.priv());
+    }
+
+    // `sys_page_alloc` does not specify `addr == nullptr` behavior
+    void* r = syscall_mmap(addr,
+                           PAGESIZE,
+                           PROT_READ | PROT_WRITE | PROT_EXEC,
+                           MAP_PRIVATE | MAP_ANON,
+                           -1,
+                           0);
+    return r == MAP_FAILED ? -1 : 0;
 }
 
 
@@ -954,40 +989,28 @@ int syscall_open(const char* pathname_vptr) {
     if (pathname_va < PROC_START_ADDR || pathname_va >= MEMSIZE_VIRTUAL) {
         return -1;
     }
-    vmiter pte(current->pagetable, pathname_va);
-    const char* pathname1 = reinterpret_cast<const char*>(pte.kptr());
-    const char* page_end = pathname1 + PAGESIZE - (pathname_va & PAGEOFFMASK);
-    if (!pathname1) return -1;
 
     char pathname[sizeof(filename_t) + 1] = {'\0'};
-
     bool is_pathname_done = false;
     unsigned pathname_length = 0;
-    for (; &pathname1[pathname_length] != page_end; ++pathname_length) {
-        if (pathname_length > sizeof(filename_t)) return -1;
-        if (pathname1[pathname_length] == '\0') {
-            is_pathname_done = true;
-            break;
-        }
-        pathname[pathname_length] = pathname1[pathname_length];
-    }
+    for (vmiter pte(current->pagetable, pathname_va);
+             !is_pathname_done;
+             pte.find(pathname_va + pathname_length)) {
 
-    // No empty pathnames
-    if (is_pathname_done && pathname_length == 0) return -1;
+        log_printf("%p\n", pte.va());
 
-    while (!is_pathname_done) {
-        pte += pathname_length;
-        assert(!(pte.va() & PAGEOFFMASK));
-        const char* pathname2 = reinterpret_cast<const char*>(pte.kptr());
-        if (!pathname2) return -1;
+        assert(pte.va() == pathname_va || !(pte.va() & PAGEOFFMASK));
+        const char* cursor = reinterpret_cast<const char*>(pte.kptr());
+        const char* page_end = cursor + PAGESIZE - (pte.va() & PAGEOFFMASK);
+        if (!cursor) return -1;
 
-        for (; ; ++pathname_length) {
+        for (; cursor != page_end; ++cursor, ++pathname_length) {
             if (pathname_length > sizeof(filename_t)) return -1;
-            if (pathname2[pathname_length] == '\0') {
+            if (*cursor == '\0') {
                 is_pathname_done = true;
                 break;
             }
-            pathname[pathname_length] = pathname2[pathname_length];
+            pathname[pathname_length] = *cursor;
         }
 
         // No empty pathnames
@@ -995,6 +1018,12 @@ int syscall_open(const char* pathname_vptr) {
     }
 
     filename_t filename = file_name(pathname);
+
+    for (unsigned i = 0; i < sizeof(filename_t); ++i) {
+        log_printf("%c", filename.characters[i]);
+    }
+    log_printf("\n");
+
     uintptr_t pa = file_find_pa(FILETABLE, filename);
     if (!pa) return -1;
     int r = fd_set_pa(current->fdtable, pa);

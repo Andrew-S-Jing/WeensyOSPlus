@@ -12,6 +12,12 @@ volatile uint8_t* stack_bottom;
 volatile uint8_t pagemark[4096] = {0};
 
 void process_main() {
+    // Get a 2 page buffer, test pathnames that straddle page borders
+    void* stack_ext = (void*) (round_down((uintptr_t) rdrsp() - 1, PAGESIZE) - 2 * PAGESIZE);
+    assert(!((uintptr_t) stack_ext & PAGEOFFMASK));
+    void* r0 = sys_mmap(stack_ext, 2 * PAGESIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
+    assert(r0 != MAP_FAILED && r0 == stack_ext);
+
     for (size_t i = 0; i != sizeof(pagemark); ++i) {
         assert(pagemark[i] == 0);
     }
@@ -73,7 +79,16 @@ void process_main() {
         } else if (x < 3) {
             sys_exit();
         } else {
-            int fd = sys_open("user file");
+            // Form a pathname that straddles two virt pages
+            char* buf = (char*) stack_ext;
+            for (unsigned i = 0; i < 2 * PAGESIZE; ++i) buf[i] = '\0';
+            char* pathname = buf + PAGESIZE - ((uintptr_t) buf & PAGEOFFMASK) - 3;
+            pathname[-1] = 'h';
+            const char temp[] = "user file";
+            strcpy(pathname, temp);
+
+            // Open file with edgecase pathname, map file
+            int fd = sys_open(pathname);
             assert(fd >= 0);
             void* r1 = sys_mmap(nullptr,
                                 PAGESIZE,
