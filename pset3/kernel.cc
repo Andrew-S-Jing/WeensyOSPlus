@@ -680,10 +680,16 @@ void* pte_next_down(x86_64_pageentry_t pte) {
 //                  onto which `MAP_ANON` must be or'd, since files are
 //                  not yet implemented. `MAP_PRIVATE` isolates the mapped
 //                  memory from other processes, whereas `MAP_SHARED` does not
-//                  preclude other processes from having write permissions.
+//                  preclude other processes from having permissions.
 //                  `MAP_ANON` means the mapped memory is initialized to zero.
-//      `fd`:       Must be `-1`. Files are not yet implemented.
-//      `offset`:   Must be `0`. Files are not yet implemented.
+//                  Shared anonymous mappings are only shareable via `sys_fork`.
+//      `fd`:       Dictates what file (associated with `fd`) the mapping will
+//                  be backed by. If `MAP_SHARED` is set, there will be no
+//                  process isolation for the mapped chunk of virt mem space,
+//                  and any process can access any file. Fails is `fd` was not
+//                  previously returned by a call to `sys_open`. Ignored if
+//                  `MAP_ANON` is set.
+//      `offset`:   Ignored (multi-page files are not yet implemented).
 //
 //    Returns:
 //      Success:    Returns the virt addr to which the requested memory
@@ -777,6 +783,10 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
     //      ** NOT INCORRECT, JUST USES MEM INEFFICIENTLY ON LARGE MMAPs **
     x86_64_pagetable* pt = current->pagetable;
     ssize_t npagesneeded = 0;
+    // For each page of the mapping, a page must be committed if the mapping
+    // is a (1) writable anonymous mapping or (2) private file-backed mapping.
+    bool mempageneeded = ((flags & MAP_ANON) && (prot & PROT_WRITE))
+                         || (!(flags & MAP_ANON) && (flags & MAP_PRIVATE));
     for (uintptr_t cursor = addr; cursor < end; cursor += PAGESIZE) {
 
         // Calculate lowest level of PTP that has the PTE for `cursor`
@@ -798,8 +808,8 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
         }
 
         // # of pages needed is `level_present - 1 + 1` for `level_present - 1`
-        // PTPs needed and `+ 1` mem page needed if writable
-        npagesneeded += level_present - 1 + (prot & PROT_WRITE ? 1 : 0);
+        // PTPs needed and either `1` or `0` mem pages needed.
+        npagesneeded += level_present - 1 + (mempageneeded ? 1 : 0);
     }
 
     // Confirm enough committable for both mem pages and pagetable pages
@@ -817,7 +827,7 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
 
     // Map anonymous pages, should never fail
     if (flags & MAP_ANON) {
-        bool use_newpage = !(flags & MAP_SHARED) || !(prot & PROT_WRITE);
+        bool use_newpage = (flags & MAP_PRIVATE) || !(prot & PROT_WRITE);
 
         for (uintptr_t cursor = addr;
                  cursor < end;
@@ -830,7 +840,7 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                 ++physpages[NEWPAGE_ADDR / PAGESIZE].refcount;
                 if (prot & PROT_WRITE) ++ncommitted;
 
-            // Set up writable page (newly allocated and zeroed page)
+            // Set up shared writable page (newly allocated and zeroed page)
             } else {
                 map_kptr = kalloc(PAGESIZE);
                 memset(map_kptr, 0, PAGESIZE);
@@ -840,21 +850,29 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
             assert(map_kptr);
             vmiter(current->pagetable, cursor).map(map_kptr, perm);
         }
-    
-    // Files not implemented (must be `MAP_ANON`)
+
+    // Map a file
     } else {
         void* file = fd_find_kptr(current->fdtable, fd);
+        // `fd` not mapped for process
         if (!file) return MAP_FAILED;
 
-        void* map_kptr = file;
-        if (prot & PROT_WRITE) {
-            ++physpages[kptr2pa(file) / PAGESIZE].refcount;
-            if (flags & MAP_PRIVATE) ++ncommitted;
-        } else {
+        void* map_kptr;
+
+        // Private read-only files are immediately copied to prevent clobbering
+        if (!(prot & PROT_WRITE) && (flags & MAP_PRIVATE)) {
             map_kptr = kalloc(PAGESIZE);
             if (!map_kptr) return MAP_FAILED;
             memcpy(map_kptr, file, PAGESIZE);
+
+        // All other mappings use the underlying file's phys mem
+        } else {
+            map_kptr = file;
+            ++physpages[kptr2pa(file) / PAGESIZE].refcount;
+            // Commit a copy-on-write page for private writable pages
+            if ((prot & PROT_WRITE) && (flags & MAP_PRIVATE)) ++ncommitted;
         }
+
         vmiter(current->pagetable, addr).map(map_kptr, perm);
     }
 
@@ -985,25 +1003,34 @@ pid_t syscall_fork() {
 //    Returns `-1` on failure.
 
 int syscall_open(const char* pathname_vptr) {
+
+    // Entry
     uintptr_t pathname_va = kptr2pa(pathname_vptr);
     if (pathname_va < PROC_START_ADDR || pathname_va >= MEMSIZE_VIRTUAL) {
         return -1;
     }
 
+    // Locals
     char pathname[sizeof(filename_t) + 1] = {'\0'};
     bool is_pathname_done = false;
     unsigned pathname_length = 0;
+
+    // Construct `pathname` out of all characters in the string,
+    // allowing for strings that straddle page borders. This design
+    // further ensures scalability if pathnames can be larger in the future.
     for (vmiter pte(current->pagetable, pathname_va);
              !is_pathname_done;
              pte.find(pathname_va + pathname_length)) {
 
-        log_printf("%p\n", pte.va());
-
+        // Set this iteration's locals
         assert(pte.va() == pathname_va || !(pte.va() & PAGEOFFMASK));
         const char* cursor = reinterpret_cast<const char*>(pte.kptr());
         const char* page_end = cursor + PAGESIZE - (pte.va() & PAGEOFFMASK);
+
+        // String goes into unmapped virt mem
         if (!cursor) return -1;
 
+        // Build `pathname`
         for (; cursor != page_end; ++cursor, ++pathname_length) {
             if (pathname_length > sizeof(filename_t)) return -1;
             if (*cursor == '\0') {
@@ -1019,16 +1046,14 @@ int syscall_open(const char* pathname_vptr) {
 
     filename_t filename = file_name(pathname);
 
-    for (unsigned i = 0; i < sizeof(filename_t); ++i) {
-        log_printf("%c", filename.characters[i]);
-    }
-    log_printf("\n");
-
     uintptr_t pa = file_find_pa(FILETABLE, filename);
+    // File not found
     if (!pa) return -1;
-    int r = fd_set_pa(current->fdtable, pa);
-    if (r >= 0) ++physpages[pa / PAGESIZE].refcount;
-    return r;
+
+    int fd = fd_set_pa(current->fdtable, pa);
+    // On success, `fd` now refers to the file at `pa`
+    if (fd >= 0) ++physpages[pa / PAGESIZE].refcount;
+    return fd;
 }
 
 
