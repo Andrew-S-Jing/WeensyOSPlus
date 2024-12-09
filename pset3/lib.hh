@@ -225,6 +225,8 @@ inline uint32_t crc32c(const void* buf, size_t sz) {
 #define SYSCALL_MMAP            8
 #define SYSCALL_OPEN            9
 #define SYSCALL_CLOSE           10
+#define SYSCALL_PAGE_FREE       11
+#define SYSCALL_MUNMAP          12
 
 
 // System call error return values

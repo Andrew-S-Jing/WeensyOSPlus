@@ -161,6 +161,23 @@ inline int sys_close(int fd) {
     return make_syscall(SYSCALL_CLOSE, fd);
 }
 
+// sys_munmap(addr, length)
+//    Unmaps the memory range `[addr, addr + length)` from the process's
+//    virtual address space.
+//    Returns `0` on success and `-1` on failure.
+inline int sys_munmap(void* addr, size_t length) {
+    return make_syscall(SYSCALL_MUNMAP,
+                        reinterpret_cast<uintptr_t>(addr),
+                        length);
+}
+
+// sys_page_free(addr)
+//    Free the page of memory at address `addr` for this process.
+//    Returns `0` on success and `-1` on failure.
+inline int sys_page_free(void* addr) {
+    return make_syscall(SYSCALL_PAGE_FREE, reinterpret_cast<uintptr_t>(addr));
+}
+
 // sys_fork()
 //    Fork the current process. On success, returns the child's process ID to
 //    the parent, and returns 0 to the child. On failure, returns a negative

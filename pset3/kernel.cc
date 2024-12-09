@@ -547,6 +547,7 @@ int syscall_close(int fd);
 void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                    int fd, off_t offset);
 int syscall_page_alloc(uintptr_t addr);
+int syscall_munmap(uintptr_t addr, size_t length);
 pid_t syscall_fork();
 
 
@@ -598,7 +599,7 @@ uintptr_t syscall(regstate* regs) {
         schedule();             // does not return
 
     case SYSCALL_OPEN:
-        return syscall_open(reinterpret_cast<const char*>(current->regs.reg_rdi));
+        return syscall_open(reinterpret_cast<char*>(current->regs.reg_rdi));
 
     case SYSCALL_CLOSE:
         return syscall_close(current->regs.reg_rdi);
@@ -613,6 +614,9 @@ uintptr_t syscall(regstate* regs) {
 
     case SYSCALL_PAGE_ALLOC:
         return syscall_page_alloc(current->regs.reg_rdi);
+
+    case SYSCALL_MUNMAP:
+        return syscall_munmap(current->regs.reg_rdi, current->regs.reg_rsi);
 
     case SYSCALL_FORK:
         return syscall_fork();
@@ -908,6 +912,59 @@ int syscall_page_alloc(uintptr_t addr) {
                            -1,
                            0);
     return r == MAP_FAILED ? -1 : 0;
+}
+
+
+// syscall_munmap(addr, length)
+//    Unmaps the memory range `[addr, addr + length)` from the process's
+//    virt addr space. All of the memory in the range must have been
+//    previously mapped by `sys_mmap` or `sys_page_alloc`. `addr` and
+//    `length` must be multiples of `PAGESIZE`.
+//    Returns `0` on success, `-1` on failure.
+
+int syscall_munmap(uintptr_t addr, size_t length) {
+
+    // Entry errors
+    if (!addr || (addr & PAGEOFFMASK) || (length & PAGEOFFMASK)) return -1;
+    // Fail on misaligned or kernel memspace virt addr
+    bool inaccessible, misaligned;
+    inaccessible = addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL;
+    if (inaccessible) return -1;
+    misaligned = addr & PAGEOFFMASK;
+    if (misaligned) return -1;
+    // Test for valid range in virt mem space
+    if (length == 0) return 0;
+    uintptr_t end = addr + length;
+    bool overflow, end_inaccessible;
+    overflow = end < addr;
+    if (overflow) return -1;
+    end_inaccessible = end < PROC_START_ADDR || end >= MEMSIZE_VIRTUAL;
+    if (end_inaccessible) return -1;
+
+    // Confirm all pages in the range are mapped
+    for (vmiter pte(current->pagetable, addr);
+             pte.va() < end;
+             pte += PAGESIZE) {
+        if (!pte.present()) return -1;
+    }
+
+    // Unmap each page in the range, should never fail
+    for (vmiter pte(current->pagetable, addr);
+             pte.va() < end;
+             pte += PAGESIZE) {
+        kfree(pte.kptr(), pte.priv());
+    }
+
+    return 0;
+}
+
+
+// syscall_page_free(addr)
+//    Frees the page at `addr` in the process's virt addr space.
+//    Returns `0` on success, `-1` on failure.
+
+int syscall_page_free(uintptr_t addr) {
+    return syscall_munmap(addr, PAGESIZE);
 }
 
 
