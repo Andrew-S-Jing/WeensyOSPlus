@@ -107,10 +107,15 @@ void kernel_start(const char* command) {
     // zero the filetable
     memset(pa2kptr(FILETABLE_ADDR), 0, PAGESIZE);
     
-    // check that `physpageinfo::refcount` type can handle max refs to newpage
+    // check that `physpageinfo::refcount` type can handle max refs to a
+    // phys page. that is, every process maxes out FD references to a file
+    // and every virt page maps that that file.
     physpageinfo max;
     --max.refcount;
-    assert(max.refcount >= PID_MAX * (MEMSIZE_VIRTUAL / PAGESIZE));
+    size_t proc_nvirtpages = (MEMSIZE_VIRTUAL - PROC_START_ADDR) / PAGESIZE;
+    size_t proc_refmax = NFDENTRIES + proc_nvirtpages;
+    size_t total_refmax = PID_MAX * proc_refmax;
+    assert(max.refcount > total_refmax);
 
     // (re-)initialize kernel pagetable (kernel pages are shared)
     for (uintptr_t addr = 0; addr < MEMSIZE_PHYSICAL; addr += PAGESIZE) {
@@ -282,6 +287,9 @@ void kfree_pagetable(x86_64_pagetable* pt) {
     kfree(pt, false);
 }
 
+
+// kfree_fdtable(fdt)
+//    Dereferences each file once for every FD mapping the process holds.
 
 void kfree_fdtable(weensy_fdtable* fdt) {
     if (!fdt) return;
