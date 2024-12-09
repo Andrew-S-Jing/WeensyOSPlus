@@ -548,6 +548,7 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
                    int fd, off_t offset);
 int syscall_page_alloc(uintptr_t addr);
 int syscall_munmap(uintptr_t addr, size_t length);
+int syscall_page_free(uintptr_t addr);
 pid_t syscall_fork();
 
 
@@ -617,6 +618,9 @@ uintptr_t syscall(regstate* regs) {
 
     case SYSCALL_MUNMAP:
         return syscall_munmap(current->regs.reg_rdi, current->regs.reg_rsi);
+
+    case SYSCALL_PAGE_FREE:
+        return syscall_page_free(current->regs.reg_rdi);
 
     case SYSCALL_FORK:
         return syscall_fork();
@@ -898,11 +902,7 @@ void* syscall_mmap(uintptr_t addr, size_t length, int prot, int flags,
 int syscall_page_alloc(uintptr_t addr) {
 
     // Free a single page if needed
-    if (!addr) return -1;
-    if (!(addr & PAGEOFFMASK)) {
-        vmiter pte(current->pagetable, addr);
-        if (pte.user()) kfree(pte.kptr(), pte.priv());
-    }
+    syscall_page_free(addr);
 
     // `sys_page_alloc` does not specify `addr == nullptr` behavior
     void* r = syscall_mmap(addr,
@@ -953,6 +953,7 @@ int syscall_munmap(uintptr_t addr, size_t length) {
              pte.va() < end;
              pte += PAGESIZE) {
         kfree(pte.kptr(), pte.priv());
+        pte.map(0UL, 0);
     }
 
     return 0;

@@ -45,3 +45,8 @@ is a page-length array of phys addrs associated with the `fd`th entry.
         `p-mmapfile.cc`: Same as `p-mmapsharedfile.cc`, except the mappings of
         "user file" are all private. Also tests the edge case where the pathname
         provided to `sys_open` straddles a page boundary.
+`sys_munmap` and `sys_page_free` free and unmap phys mem associated with the
+virt mem specified in their arguments.
+    Added tests:
+        `p-allocfree.cc`: Same as `p-allocator.cc`, except when the process
+        first encounters a failed page request, it frees everything and repeats.
