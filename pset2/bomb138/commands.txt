@@ -1,5 +1,0 @@
-Shell:
-gbd -tui bomb
-
-GNU Debugger:
-r < sol.txt
